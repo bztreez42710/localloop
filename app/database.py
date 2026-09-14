@@ -15,14 +15,14 @@ def _adapt(sql:str):
         table=pragma.group(1).strip().strip('"\'')
         return "SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s",(table,),False
     s=re.sub(r"date\('now'\)",'CURRENT_DATE',s,flags=re.I)
-    # SQLite auto-increment primary keys become PostgreSQL serial keys.
+    # SQLite integer auto IDs become PostgreSQL BIGSERIAL. Foreign-key IDs are widened to BIGINT.
     s=re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT','BIGSERIAL PRIMARY KEY',s,flags=re.I)
-    # INSERT OR IGNORE -> PostgreSQL conflict-safe insert.
+    s=re.sub(r'INTEGER(\s+(?:NOT\s+NULL\s+)?)REFERENCES',r'BIGINT\1REFERENCES',s,flags=re.I)
+    s=re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+REFERENCES',r'BIGINT PRIMARY KEY REFERENCES',s,flags=re.I)
     ignore=bool(re.match(r'INSERT\s+OR\s+IGNORE\s+INTO',s,re.I))
     if ignore:
         s=re.sub(r'INSERT\s+OR\s+IGNORE\s+INTO','INSERT INTO',s,count=1,flags=re.I)
         s=s.rstrip().rstrip(';')+' ON CONFLICT DO NOTHING'
-    # INSERT OR REPLACE is used only for tables keyed by the first column.
     rep=re.match(r'INSERT\s+OR\s+REPLACE\s+INTO\s+([\w]+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)',s,re.I|re.S)
     if rep:
         table,cols,vals=rep.group(1),rep.group(2),rep.group(3)
@@ -62,7 +62,6 @@ class PgConnection:
         except self._psycopg.errors.UniqueViolation as e:
             raise sqlite3.IntegrityError(str(e)) from e
     def executescript(self,script):
-        # Project schemas contain simple semicolon-delimited DDL only.
         for stmt in script.split(';'):
             if stmt.strip(): self.execute(stmt)
     def __enter__(self): return self
