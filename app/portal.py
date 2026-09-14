@@ -90,6 +90,9 @@ def portal_login(email:str=Form(...),password:str=Form(...),portal:str=Form('any
     if not u or not u['active'] or not verify_password(password,u['password_hash']): raise HTTPException(400,'Invalid login')
     actual=staff or u['role']; expected={'store':'business','owner':'admin'}.get(portal,portal)
     if expected not in {'any',actual}: raise HTTPException(403,f'This account belongs to the {actual} portal.')
+    with db() as con:
+        try: con.execute('UPDATE users SET last_login_at=?,login_count=COALESCE(login_count,0)+1 WHERE id=?',(now(),u['id']))
+        except Exception: pass
     r=RedirectResponse(next_path,303); r.set_cookie('ll_session',sign(str(u['id'])),httponly=True,samesite='lax',secure=COOKIE_SECURE); return r
 
 @app.get('/dashboard',response_class=HTMLResponse)
@@ -119,3 +122,4 @@ from . import routing  # noqa: E402,F401
 from . import legal  # noqa: E402,F401
 from . import community_marketplace  # noqa: E402,F401
 from . import marketplace_payments  # noqa: E402,F401
+from . import admin_accounts  # noqa: E402,F401
