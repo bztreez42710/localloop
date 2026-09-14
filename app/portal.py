@@ -124,3 +124,4 @@ from . import community_marketplace  # noqa: E402,F401
 from . import marketplace_payments  # noqa: E402,F401
 from . import admin_accounts  # noqa: E402,F401
 from . import ux  # noqa: E402,F401
+from . import community_plus  # noqa: E402,F401
