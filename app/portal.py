@@ -25,15 +25,11 @@ def ensure_account(con,email,password,name,role,staff_role=None):
     if not email or not password: return
     row=con.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
     if row:
-        uid=row['id']
-        con.execute('UPDATE users SET password_hash=?,name=?,role=?,verified=1,active=1 WHERE id=?',(hash_password(password),name,role,uid))
+        uid=row['id']; con.execute('UPDATE users SET password_hash=?,name=?,role=?,verified=1,active=1 WHERE id=?',(hash_password(password),name,role,uid))
     else:
-        cur=con.execute('INSERT INTO users(email,password_hash,name,role,verified,created_at) VALUES(?,?,?,?,1,?)',(email,hash_password(password),name,role,now()))
-        uid=cur.lastrowid
-    if staff_role:
-        con.execute('INSERT OR REPLACE INTO staff_access(user_id,staff_role,read_only) VALUES(?,?,1)',(uid,staff_role))
-    else:
-        con.execute('DELETE FROM staff_access WHERE user_id=?',(uid,))
+        cur=con.execute('INSERT INTO users(email,password_hash,name,role,verified,created_at) VALUES(?,?,?,?,1,?)',(email,hash_password(password),name,role,now())); uid=cur.lastrowid
+    if staff_role: con.execute('INSERT OR REPLACE INTO staff_access(user_id,staff_role,read_only) VALUES(?,?,1)',(uid,staff_role))
+    else: con.execute('DELETE FROM staff_access WHERE user_id=?',(uid,))
     if role=='driver': con.execute('INSERT OR IGNORE INTO driver_profiles(user_id) VALUES(?)',(uid,))
     if role=='business': con.execute('INSERT OR IGNORE INTO business_profiles(user_id,business_name) VALUES(?,?)',(uid,name))
 
@@ -56,28 +52,20 @@ async def readonly_staff_guard(request:Request,call_next):
         raw=request.cookies.get('ll_session'); uid=unsign(raw) if raw else None
         if uid and uid.isdigit():
             with db() as con:
-                if con.execute('SELECT 1 FROM staff_access WHERE user_id=? AND read_only=1',(int(uid),)).fetchone():
-                    raise HTTPException(403,'Safety and developer accounts are read-only.')
+                if con.execute('SELECT 1 FROM staff_access WHERE user_id=? AND read_only=1',(int(uid),)).fetchone(): raise HTTPException(403,'Safety and developer accounts are read-only.')
     return await call_next(request)
 
 @app.get('/login',response_class=HTMLResponse)
-def portal_login_page(request:Request):
-    return page(request,'login.html')
+def portal_login_page(request:Request): return page(request,'login.html')
 
 @app.post('/login')
 def portal_login(email:str=Form(...),password:str=Form(...),portal:str=Form('any')):
     with db() as con:
-        u=con.execute('SELECT * FROM users WHERE email=?',(email.lower().strip(),)).fetchone()
-        staff=staff_role_for(con,u['id']) if u else None
-    if not u or not u['active'] or not verify_password(password,u['password_hash']):
-        raise HTTPException(400,'Invalid login')
-    actual=staff or u['role']
-    expected={'store':'business','owner':'admin'}.get(portal,portal)
-    if expected not in {'any',actual}:
-        raise HTTPException(403,f'This account belongs to the {actual} portal.')
-    r=RedirectResponse('/dashboard',303)
-    r.set_cookie('ll_session',sign(str(u['id'])),httponly=True,samesite='lax',secure=COOKIE_SECURE)
-    return r
+        u=con.execute('SELECT * FROM users WHERE email=?',(email.lower().strip(),)).fetchone(); staff=staff_role_for(con,u['id']) if u else None
+    if not u or not u['active'] or not verify_password(password,u['password_hash']): raise HTTPException(400,'Invalid login')
+    actual=staff or u['role']; expected={'store':'business','owner':'admin'}.get(portal,portal)
+    if expected not in {'any',actual}: raise HTTPException(403,f'This account belongs to the {actual} portal.')
+    r=RedirectResponse('/dashboard',303); r.set_cookie('ll_session',sign(str(u['id'])),httponly=True,samesite='lax',secure=COOKIE_SECURE); return r
 
 @app.get('/dashboard',response_class=HTMLResponse)
 def portal_dashboard(request:Request):
@@ -85,20 +73,12 @@ def portal_dashboard(request:Request):
     with db() as con:
         staff=staff_role_for(con,u['id'])
         if staff:
-            stats={'users':con.execute('SELECT COUNT(*) c FROM users').fetchone()['c'],'online':con.execute('SELECT COUNT(*) c FROM driver_profiles WHERE online=1').fetchone()['c'],'active':con.execute("SELECT COUNT(*) c FROM deliveries WHERE status IN ('posted','accepted','picked_up')").fetchone()['c'],'today':con.execute("SELECT COUNT(*) c FROM deliveries WHERE date(created_at)=date('now')").fetchone()['c'],'disputes':con.execute("SELECT COUNT(*) c FROM disputes WHERE status='open'").fetchone()['c']}
-            rows=con.execute('SELECT d.*,u.name customer,dr.name driver FROM deliveries d JOIN users u ON u.id=d.customer_id LEFT JOIN users dr ON dr.id=d.driver_id ORDER BY d.id DESC LIMIT 40').fetchall()
-            return page(request,'staff.html',staff_role=staff,stats=stats,deliveries=rows)
+            stats={'users':con.execute('SELECT COUNT(*) c FROM users').fetchone()['c'],'online':con.execute('SELECT COUNT(*) c FROM driver_profiles WHERE online=1').fetchone()['c'],'active':con.execute("SELECT COUNT(*) c FROM deliveries WHERE status IN ('posted','accepted','picked_up')").fetchone()['c'],'today':con.execute("SELECT COUNT(*) c FROM deliveries WHERE date(created_at)=date('now')").fetchone()['c'],'disputes':con.execute("SELECT COUNT(*) c FROM disputes WHERE status='open'").fetchone()['c']}; rows=con.execute('SELECT d.*,u.name customer,dr.name driver FROM deliveries d JOIN users u ON u.id=d.customer_id LEFT JOIN users dr ON dr.id=d.driver_id ORDER BY d.id DESC LIMIT 40').fetchall(); return page(request,'staff.html',staff_role=staff,stats=stats,deliveries=rows)
         if u['role']=='admin':
-            stats={'users':con.execute('SELECT COUNT(*) c FROM users').fetchone()['c'],'online':con.execute('SELECT COUNT(*) c FROM driver_profiles WHERE online=1').fetchone()['c'],'active':con.execute("SELECT COUNT(*) c FROM deliveries WHERE status IN ('posted','accepted','picked_up')").fetchone()['c'],'today':con.execute("SELECT COUNT(*) c FROM deliveries WHERE date(created_at)=date('now')").fetchone()['c'],'revenue':con.execute("SELECT COALESCE(SUM(platform_fee_cents),0) c FROM deliveries WHERE status='delivered'").fetchone()['c'],'disputes':con.execute("SELECT COUNT(*) c FROM disputes WHERE status='open'").fetchone()['c']}
-            rows=con.execute('SELECT d.*,u.name customer,dr.name driver FROM deliveries d JOIN users u ON u.id=d.customer_id LEFT JOIN users dr ON dr.id=d.driver_id ORDER BY d.id DESC LIMIT 50').fetchall()
-            return page(request,'admin.html',stats=stats,deliveries=rows)
+            stats={'users':con.execute('SELECT COUNT(*) c FROM users').fetchone()['c'],'online':con.execute('SELECT COUNT(*) c FROM driver_profiles WHERE online=1').fetchone()['c'],'active':con.execute("SELECT COUNT(*) c FROM deliveries WHERE status IN ('posted','accepted','picked_up')").fetchone()['c'],'today':con.execute("SELECT COUNT(*) c FROM deliveries WHERE date(created_at)=date('now')").fetchone()['c'],'revenue':con.execute("SELECT COALESCE(SUM(platform_fee_cents),0) c FROM deliveries WHERE status='delivered'").fetchone()['c'],'disputes':con.execute("SELECT COUNT(*) c FROM disputes WHERE status='open'").fetchone()['c']}; rows=con.execute('SELECT d.*,u.name customer,dr.name driver FROM deliveries d JOIN users u ON u.id=d.customer_id LEFT JOIN users dr ON dr.id=d.driver_id ORDER BY d.id DESC LIMIT 50').fetchall(); return page(request,'admin.html',stats=stats,deliveries=rows)
         if u['role']=='driver':
-            prof=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
-            available=con.execute("SELECT d.*,u.name customer FROM deliveries d JOIN users u ON u.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC").fetchall()
-            mine=con.execute('SELECT * FROM deliveries WHERE driver_id=? ORDER BY id DESC LIMIT 30',(u['id'],)).fetchall()
-            return page(request,'driver.html',profile=prof,available=available,mine=mine)
-        mine=con.execute('SELECT d.*,dr.name driver FROM deliveries d LEFT JOIN users dr ON dr.id=d.driver_id WHERE d.customer_id=? OR d.business_id=? ORDER BY d.id DESC',(u['id'],u['id'])).fetchall()
-        return page(request,'customer.html',deliveries=mine)
+            prof=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone(); available=con.execute("SELECT d.*,u.name customer FROM deliveries d JOIN users u ON u.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC").fetchall(); mine=con.execute('SELECT * FROM deliveries WHERE driver_id=? ORDER BY id DESC LIMIT 30',(u['id'],)).fetchall(); return page(request,'driver.html',profile=prof,available=available,mine=mine)
+        mine=con.execute('SELECT d.*,dr.name driver FROM deliveries d LEFT JOIN users dr ON dr.id=d.driver_id WHERE d.customer_id=? OR d.business_id=? ORDER BY d.id DESC',(u['id'],u['id'])).fetchall(); return page(request,'customer.html',deliveries=mine)
 
 from . import main as _main_module
 from .database import db as _persistent_db
@@ -107,5 +87,5 @@ db=_persistent_db
 
 from . import marketplace  # noqa: E402,F401
 from . import production  # noqa: E402,F401
-from . import paypal  # noqa: E402,F401
+from . import payments  # noqa: E402,F401
 from . import routing  # noqa: E402,F401
