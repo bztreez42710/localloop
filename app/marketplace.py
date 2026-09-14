@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS shopping_orders(
  platform_fee_cents INTEGER NOT NULL DEFAULT 150,
  estimated_goods_cents INTEGER DEFAULT 0,
  actual_goods_cents INTEGER DEFAULT 0,
- paypal_order_id TEXT DEFAULT '',
+ payment_provider_ref TEXT DEFAULT '',
  payment_status TEXT DEFAULT 'unfunded',
  receipt_photo TEXT DEFAULT '',
  created_at TEXT NOT NULL,
@@ -54,10 +54,7 @@ def marketplace_startup():
     with db() as con:
         con.executescript(SHOP_SCHEMA)
         cols={r['name'] for r in con.execute('PRAGMA table_info(shopping_orders)').fetchall()}
-        migrations={
-            'cancelled_at':'TEXT','estimated_goods_cents':'INTEGER DEFAULT 0','actual_goods_cents':'INTEGER DEFAULT 0',
-            'paypal_order_id':"TEXT DEFAULT ''",'payment_status':"TEXT DEFAULT 'unfunded'",'receipt_photo':"TEXT DEFAULT ''"
-        }
+        migrations={'cancelled_at':'TEXT','estimated_goods_cents':'INTEGER DEFAULT 0','actual_goods_cents':'INTEGER DEFAULT 0','payment_provider_ref':"TEXT DEFAULT ''",'payment_status':"TEXT DEFAULT 'unfunded'",'receipt_photo':"TEXT DEFAULT ''"}
         for name,definition in migrations.items():
             if name not in cols: con.execute(f'ALTER TABLE shopping_orders ADD COLUMN {name} {definition}')
 
@@ -138,18 +135,12 @@ def shopping_order_status(oid:int,request:Request,status:str=Form(...),actual_go
             con.execute("UPDATE shopping_orders SET status='delivering',actual_goods_cents=?,receipt_photo=?,updated_at=? WHERE id=?",(actual,photo,now(),oid))
         elif status=='delivered':
             con.execute("UPDATE shopping_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=?",(now(),now(),oid))
-            con.execute('UPDATE driver_profiles SET completed=completed+1,payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(o['driver_pay_cents']+o['actual_goods_cents'],u['id']))
-            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'shopping_reimbursement',o['driver_pay_cents']+o['actual_goods_cents'],f'Shopping order #{oid}: merchandise reimbursement + driver pay',now()))
+            payout=o['driver_pay_cents']+o['actual_goods_cents']
+            con.execute('UPDATE driver_profiles SET completed=completed+1,payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(payout,u['id']))
+            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'shopping_reimbursement',payout,f'Shopping order #{oid}: merchandise reimbursement + driver pay',now()))
             con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(NULL,NULL,?,?,?,?)',('platform_fee',o['platform_fee_cents'],f'Shopping order #{oid}',now()))
-            con.execute("INSERT INTO payment_records(user_id,shopping_order_id,provider,amount_cents,status,kind,created_at) VALUES(?,?,?,?,?,?,?)",(u['id'],oid,'paypal',o['driver_pay_cents']+o['actual_goods_cents'],'pending','shopper_payout',now()))
-        else:
-            con.execute("UPDATE shopping_orders SET status='shopping',updated_at=? WHERE id=?",(now(),oid))
-    if status=='delivered':
-        try:
-            from .paypal import settle_shopping_order
-            settle_shopping_order(oid)
-        except Exception:
-            pass
+            con.execute("INSERT INTO payment_records(user_id,shopping_order_id,provider,amount_cents,status,kind,created_at) VALUES(?,?,?,?,?,?,?)",(u['id'],oid,'finix',payout,'pending','shopper_payout',now()))
+        else: con.execute("UPDATE shopping_orders SET status='shopping',updated_at=? WHERE id=?",(now(),oid))
     return RedirectResponse('/driver/shop',303)
 
 @app.get('/shopping/ops', response_class=HTMLResponse)
