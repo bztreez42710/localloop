@@ -3,6 +3,7 @@ import os
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from .main import app, db, now, hash_password, verify_password, sign, unsign, page, require_user, COOKIE_SECURE
+from .supabase_auth import AUTH_ENABLED, sign_in, set_auth_cookies
 
 OWNER_EMAIL=os.environ.get('LOCALLOOP_OWNER_EMAIL','').strip().lower()
 OWNER_PASSWORD=os.environ.get('LOCALLOOP_OWNER_PASSWORD','')
@@ -84,6 +85,17 @@ def portal_login_page(request:Request): return page(request,'login.html')
 
 @app.post('/login')
 def portal_login(email:str=Form(...),password:str=Form(...),portal:str=Form('any')):
+    if AUTH_ENABLED:
+        auth=sign_in(email.lower().strip(),password); sid=(auth.get('user') or {}).get('id')
+        with db() as con:
+            u=con.execute('SELECT * FROM users WHERE supabase_user_id=? OR email=?',(sid,email.lower().strip())).fetchone()
+            if u and not u['supabase_user_id']: con.execute('UPDATE users SET supabase_user_id=? WHERE id=?',(sid,u['id']))
+            staff=staff_role_for(con,u['id']) if u else None; next_path=_next_for_user(con,u) if u else '/dashboard'
+        if not u: raise HTTPException(403,'This Supabase account does not have a LocalLoop profile.')
+        if not u['active']: raise HTTPException(403,'This account is disabled.')
+        actual=staff or u['role']; expected={'store':'business','owner':'admin'}.get(portal,portal)
+        if expected not in {'any',actual}: raise HTTPException(403,f'This account belongs to the {actual} portal.')
+        r=RedirectResponse(next_path,303); set_auth_cookies(r,auth,COOKIE_SECURE); return r
     with db() as con:
         u=con.execute('SELECT * FROM users WHERE email=?',(email.lower().strip(),)).fetchone(); staff=staff_role_for(con,u['id']) if u else None
         next_path=_next_for_user(con,u) if u else '/dashboard'

@@ -23,6 +23,10 @@ services:
         value: 1.0
       - key: LOCALLOOP_COOKIE_SECURE
         value: "1"
+      - key: SUPABASE_URL
+        value: https://uthhuobmsuidnnghyfre.supabase.co
+      - key: SUPABASE_PUBLISHABLE_KEY
+        value: sb_publishable_6MIZsbSsdL9gwuyV0tkyEg_SKQwQSPk
       - key: LOCALLOOP_ADMIN_EMAIL
         value: admin@localloop.local
       - key: LOCALLOOP_ADMIN_PASSWORD
