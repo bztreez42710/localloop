@@ -18,8 +18,7 @@ DEMO_CUSTOMER_EMAIL=os.environ.get('LOCALLOOP_DEMO_CUSTOMER_EMAIL','').strip().l
 DEMO_CUSTOMER_PASSWORD=os.environ.get('LOCALLOOP_DEMO_CUSTOMER_PASSWORD','')
 
 def staff_role_for(con,user_id:int):
-    row=con.execute('SELECT staff_role FROM staff_access WHERE user_id=?',(user_id,)).fetchone()
-    return row['staff_role'] if row else None
+    row=con.execute('SELECT staff_role FROM staff_access WHERE user_id=?',(user_id,)).fetchone(); return row['staff_role'] if row else None
 
 def ensure_account(con,email,password,name,role,staff_role=None):
     if not email or not password: return
@@ -89,3 +88,4 @@ from . import marketplace  # noqa: E402,F401
 from . import production  # noqa: E402,F401
 from . import payments  # noqa: E402,F401
 from . import routing  # noqa: E402,F401
+from . import legal  # noqa: E402,F401
