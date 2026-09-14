@@ -103,7 +103,6 @@ def disable_handoff(did:int,request:Request):
     return RedirectResponse(f'/deliveries/{did}/handoff',303)
 
 
-# Safer delivery completion: if the customer enabled a handoff code, the driver must enter it.
 _remove('/deliveries/{did}/status','POST')
 @app.post('/deliveries/{did}/status')
 def delivery_status_with_handoff(did:int,request:Request,status:str=Form(...),proof:str=Form(''),proof_photo:str=Form(''),handoff_code:str=Form('')):
@@ -128,7 +127,6 @@ def delivery_status_with_handoff(did:int,request:Request,status:str=Form(...),pr
     return RedirectResponse('/dashboard',303)
 
 
-# Paid marketplace orders should never silently become cancelled without a real refund path.
 _remove('/market/orders/{oid}/cancel','POST')
 @app.post('/market/orders/{oid}/cancel')
 def safer_market_cancel(oid:int,request:Request):
@@ -175,3 +173,24 @@ def market_received(oid:int,request:Request):
         if o['status']!='ready_for_handoff': raise HTTPException(400,'The seller has not marked this order ready yet.')
         con.execute("UPDATE marketplace_orders SET status='completed',completed_at=?,updated_at=? WHERE id=?",(now(),now(),oid))
     return RedirectResponse(f'/market/orders/{oid}',303)
+
+
+@app.get('/admin/refunds',response_class=HTMLResponse)
+def admin_refunds(request:Request):
+    u=require_user(request)
+    if u['role']!='admin': raise HTTPException(403)
+    with db() as con:
+        rows=con.execute("SELECT r.*,o.total_cents,o.payment_provider_ref,l.title,b.name buyer_name,s.name seller_name FROM marketplace_refund_requests r JOIN marketplace_orders o ON o.id=r.order_id JOIN marketplace_listings l ON l.id=o.listing_id JOIN users b ON b.id=o.buyer_id JOIN users s ON s.id=o.seller_id ORDER BY CASE WHEN r.status='open' THEN 0 ELSE 1 END,r.updated_at DESC").fetchall()
+    return page(request,'admin_refunds.html',refunds=rows)
+
+
+@app.post('/admin/refunds/{oid}/status')
+def admin_refund_status(oid:int,request:Request,status:str=Form(...)):
+    u=require_user(request)
+    if u['role']!='admin': raise HTTPException(403)
+    if status not in {'open','reviewed','resolved'}: raise HTTPException(400)
+    with db() as con:
+        r=con.execute('SELECT * FROM marketplace_refund_requests WHERE order_id=?',(oid,)).fetchone()
+        if not r: raise HTTPException(404)
+        con.execute('UPDATE marketplace_refund_requests SET status=?,updated_at=? WHERE order_id=?',(status,now(),oid))
+    return RedirectResponse('/admin/refunds',303)
