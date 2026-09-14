@@ -102,3 +102,4 @@ def portal_dashboard(request:Request):
 
 from . import marketplace  # noqa: E402,F401
 from . import production  # noqa: E402,F401
+from . import paypal  # noqa: E402,F401
