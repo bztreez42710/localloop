@@ -88,7 +88,9 @@ def seller_center(request:Request):
     u=require_user(request)
     if u['role'] not in {'business','customer','admin'}: raise HTTPException(403,'Seller tools are available to customer, store, and owner accounts.')
     with db() as con:
-        p=_profile(con,u['id']); rows=con.execute('SELECT * FROM marketplace_listings WHERE seller_id=? ORDER BY id DESC',(u['id'],)).fetchall(); stats=_seller_stats(con,u['id'])
+        p=_profile(con,u['id'])
+        rows=con.execute('SELECT * FROM marketplace_listings WHERE seller_id=? ORDER BY id DESC',(u['id'],)).fetchall()
+        stats=_seller_stats(con,u['id'])
         orders=con.execute('SELECT o.*,l.title FROM marketplace_orders o JOIN marketplace_listings l ON l.id=o.listing_id WHERE o.seller_id=? ORDER BY o.id DESC LIMIT 50',(u['id'],)).fetchall()
     return page(request,'seller_center.html',profile=p,listings=rows,seller_stats=stats,orders=orders)
 
@@ -102,8 +104,11 @@ def seller_profile_save(request:Request,display_name:str=Form(...),seller_kind:s
     if return_default_days not in {0,7,14,30}: raise HTTPException(400,'Choose an available return window.')
     state=_clean(state_code).upper()[:2]
     with db() as con:
-        con.execute('''INSERT OR REPLACE INTO seller_marketplace_profiles(user_id,display_name,seller_kind,home_based,contact_email,contact_phone,state_code,return_default_days,inform_verified,annual_certified_at,seller_attested_at,suspended,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,COALESCE((SELECT inform_verified FROM seller_marketplace_profiles WHERE user_id=?),0),COALESCE((SELECT annual_certified_at FROM seller_marketplace_profiles WHERE user_id=?),''),?,COALESCE((SELECT suspended FROM seller_marketplace_profiles WHERE user_id=?),0),?)''',(u['id'],_clean(display_name),seller_kind,1 if home_based else 0,_clean(contact_email).lower(),_clean(contact_phone),state,return_default_days,u['id'],u['id'],now(),u['id'],now()))
+        p=_profile(con,u['id'])
+        if p:
+            con.execute('UPDATE seller_marketplace_profiles SET display_name=?,seller_kind=?,home_based=?,contact_email=?,contact_phone=?,state_code=?,return_default_days=?,seller_attested_at=?,updated_at=? WHERE user_id=?',(_clean(display_name),seller_kind,1 if home_based else 0,_clean(contact_email).lower(),_clean(contact_phone),state,return_default_days,now(),now(),u['id']))
+        else:
+            con.execute('INSERT INTO seller_marketplace_profiles(user_id,display_name,seller_kind,home_based,contact_email,contact_phone,state_code,return_default_days,seller_attested_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(u['id'],_clean(display_name),seller_kind,1 if home_based else 0,_clean(contact_email).lower(),_clean(contact_phone),state,return_default_days,now(),now()))
     return RedirectResponse('/market/sell',303)
 
 @app.post('/market/listings')
