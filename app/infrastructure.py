@@ -7,7 +7,6 @@ from .payments import configured as payments_configured, FINIX_ENV
 from .storage import configured as storage_configured
 
 RENDER_SERVICE_DASHBOARD='https://dashboard.render.com/web/srv-dak31mh5efls73fsc6t0'
-RENDER_DB_DASHBOARD='https://dashboard.render.com/d/dpg-dak3f23m8hqs73991cpg-a'
 
 
 def _checks():
@@ -27,17 +26,19 @@ def _checks():
 def _steps(checks):
     return [
         {
-            'key':'database','title':'1. Connect Render PostgreSQL','ready':checks['database'],
-            'why':'Moves LocalLoop off temporary SQLite storage and into a durable database.',
-            'provider_url':RENDER_DB_DASHBOARD,'provider_label':'Open LocalLoop PostgreSQL',
+            'key':'database','title':'1. Connect free external PostgreSQL','ready':checks['database'],
+            'why':'Removes LocalLoop from the expiring Render free database and keeps the app portable. Supabase is the preferred free option for this stage.',
+            'provider_url':'https://supabase.com/dashboard/projects','provider_label':'Open Supabase',
             'instructions':[
-                'Open the database and choose Connect.',
-                'Copy the INTERNAL database URL because the app and database are both on Render in Oregon.',
-                'Open the LocalLoop web service Environment page and add the variable below.',
-                'Save changes and let Render redeploy LocalLoop.'
+                'Create a free Supabase account/project named LocalLoop.',
+                'Open Project Settings → Database and copy a PostgreSQL connection string. Use the session/pooler connection string if direct IPv6 connectivity is unavailable from Render.',
+                'Replace the password placeholder with the database password you chose when creating the Supabase project.',
+                'Open the LocalLoop Render web service Environment page and set DATABASE_URL to that full PostgreSQL URL.',
+                'Save changes and let Render redeploy LocalLoop. The app already supports standard PostgreSQL URLs, so no provider-specific database code is required.',
+                'Keep the old Render database only as temporary fallback until LocalLoop starts successfully on Supabase, then stop relying on it.'
             ],
-            'env':['DATABASE_URL=<Render internal PostgreSQL URL>'],
-            'secret_note':'Treat the database URL like a password. Never post it publicly or commit it to GitHub.'
+            'env':['DATABASE_URL=<Supabase PostgreSQL connection string>'],
+            'secret_note':'Treat DATABASE_URL as a password. Never post it in chat or commit it to GitHub. Supabase Free is $0/month but currently pauses projects after one week of inactivity; LocalLoop traffic will normally keep an active project awake. Provider terms can change, so LocalLoop remains portable instead of being locked to one database vendor.'
         },
         {
             'key':'finix_live','title':'2. Turn on Finix Live','ready':checks['finix_live'],
