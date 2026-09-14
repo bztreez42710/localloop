@@ -61,3 +61,5 @@ def market_pay_refresh(oid:int,request:Request):
             if cur.rowcount==1: con.execute("UPDATE marketplace_orders SET payment_status='funded',status='paid',updated_at=? WHERE id=?",(now(),oid))
         elif failed: con.execute("UPDATE marketplace_orders SET payment_status='failed',updated_at=? WHERE id=?",(now(),oid))
     return RedirectResponse(f'/market/orders/{oid}',303)
+
+from . import marketplace_reporting  # noqa: E402,F401
