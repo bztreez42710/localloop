@@ -35,19 +35,30 @@ def route_info(pickup:str,dropoff:str):
     rt=data['routes'][0]
     return {'pickup':a,'dropoff':b,'distance_miles':round(float(rt['distance'])/1609.344,2),'duration_minutes':round(float(rt['duration'])/60,1),'geometry':rt.get('geometry')}
 
+def _account_ready(u):
+    if u['role']=='admin': return True
+    if u['role'] not in {'customer','business'}: return False
+    with db() as con:
+        try:
+            r=con.execute("SELECT verification_status FROM account_verifications WHERE user_id=?",(u['id'],)).fetchone()
+            return bool(r and r['verification_status']=='verified')
+        except Exception:
+            return False
+
 @app.get('/api/address/verify')
 def verify_address(q:str,request:Request):
-    require_user(request)
+    u=require_user(request)
+    if u['role'] in {'customer','business'} and not _account_ready(u): return JSONResponse({'ok':False,'error':'Complete account verification before creating a delivery.'},status_code=403)
     try: return JSONResponse({'ok':True,**geocode_address(q)})
     except Exception as e: return JSONResponse({'ok':False,'error':str(e)},status_code=400)
 
 @app.get('/api/route')
 def api_route(pickup:str,dropoff:str,request:Request):
-    require_user(request)
+    u=require_user(request)
+    if u['role'] in {'customer','business'} and not _account_ready(u): return JSONResponse({'ok':False,'error':'Complete account verification before creating a delivery.'},status_code=403)
     try: return JSONResponse({'ok':True,**route_info(pickup,dropoff)})
     except Exception as e: return JSONResponse({'ok':False,'error':str(e)},status_code=400)
 
-# Replace the previous delivery-post route so distance comes from a real Spokane route.
 for r in list(app.router.routes):
     if getattr(r,'path',None)=='/deliveries' and 'POST' in (getattr(r,'methods',set()) or set()): app.router.routes.remove(r)
 
@@ -55,6 +66,7 @@ for r in list(app.router.routes):
 def create_routed_delivery(request:Request,pickup:str=Form(...),dropoff:str=Form(...),item_description:str=Form(...),distance_miles:float=Form(1),notes:str=Form('')):
     u=require_user(request)
     if u['role'] not in {'customer','business','admin'}: raise HTTPException(403)
+    if u['role'] in {'customer','business'} and not _account_ready(u): return RedirectResponse('/account/verification',303)
     try: rt=route_info(pickup,dropoff)
     except Exception as e: raise HTTPException(400,f'Please enter valid Spokane pickup and drop-off addresses: {e}')
     miles=rt['distance_miles']; q=quote(miles); t=now()
