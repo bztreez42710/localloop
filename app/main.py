@@ -22,6 +22,15 @@ app = FastAPI(title="LocalLoop", version="0.1.0")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 
+@app.middleware('http')
+async def supabase_session_refresh(request:Request,call_next):
+    response=await call_next(request)
+    refreshed=getattr(request.state,'supabase_refreshed',None)
+    if refreshed:
+        from .supabase_auth import set_auth_cookies
+        set_auth_cookies(response,refreshed,COOKIE_SECURE)
+    return response
+
 def db():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
@@ -44,6 +53,17 @@ def unsign(token):
     except Exception: return None
 
 def user_from_request(request):
+    from .supabase_auth import AUTH_ENABLED, verified_identity
+    if AUTH_ENABLED:
+        identity=verified_identity(request)
+        if not identity: return None
+        sid=identity.get('id'); email=(identity.get('email') or '').lower()
+        with db() as con:
+            u=con.execute('SELECT * FROM users WHERE supabase_user_id=?',(sid,)).fetchone()
+            if not u and email:
+                u=con.execute('SELECT * FROM users WHERE email=?',(email,)).fetchone()
+                if u: con.execute('UPDATE users SET supabase_user_id=? WHERE id=?',(sid,u['id']))
+            return u
     raw=request.cookies.get("ll_session"); uid=unsign(raw) if raw else None
     if not uid or not uid.isdigit(): return None
     with db() as con: return con.execute("SELECT * FROM users WHERE id=?",(int(uid),)).fetchone()
@@ -70,6 +90,10 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True,exist_ok=True)
     with db() as con:
         con.executescript(SCHEMA)
+        try: con.execute('ALTER TABLE users ADD COLUMN supabase_user_id TEXT')
+        except Exception: pass
+        try: con.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_supabase_id ON users(supabase_user_id)')
+        except Exception: pass
         if ADMIN_EMAIL and ADMIN_PASSWORD and not con.execute("SELECT 1 FROM users WHERE role='admin'").fetchone(): con.execute("INSERT INTO users(email,password_hash,name,role,verified,created_at) VALUES(?,?,?,?,1,?)",(ADMIN_EMAIL,hash_password(ADMIN_PASSWORD),"LocalLoop Admin","admin",now()))
 @app.on_event("startup")
 def startup(): init_db()
@@ -89,23 +113,39 @@ def register_page(request:Request): return page(request,"register.html")
 @app.post("/register")
 def register(email:str=Form(...),password:str=Form(...),name:str=Form(...),role:str=Form(...),business_name:str=Form("")):
     if role not in {"customer","driver","business"}: raise HTTPException(400,"Bad role")
+    from .supabase_auth import AUTH_ENABLED, sign_up, set_auth_cookies
+    auth=sign_up(email.lower().strip(),password,name.strip(),role) if AUTH_ENABLED else None
+    sid=(auth.get('user') or {}).get('id') if auth else None
     try:
         with db() as con:
-            cur=con.execute("INSERT INTO users(email,password_hash,name,role,created_at) VALUES(?,?,?,?,?)",(email.lower().strip(),hash_password(password),name.strip(),role,now())); uid=cur.lastrowid
+            cur=con.execute("INSERT INTO users(email,password_hash,name,role,created_at,supabase_user_id) VALUES(?,?,?,?,?,?)",(email.lower().strip(),hash_password(password) if not AUTH_ENABLED else 'supabase-managed',name.strip(),role,now(),sid)); uid=cur.lastrowid
             if role=="driver": con.execute("INSERT INTO driver_profiles(user_id) VALUES(?)",(uid,))
             if role=="business": con.execute("INSERT INTO business_profiles(user_id,business_name) VALUES(?,?)",(uid,business_name.strip() or name.strip()))
     except sqlite3.IntegrityError: raise HTTPException(400,"Email already exists")
-    r=RedirectResponse("/dashboard",303); r.set_cookie("ll_session",sign(str(uid)),httponly=True,samesite="lax",secure=COOKIE_SECURE); return r
+    if AUTH_ENABLED and not auth.get('access_token'): return RedirectResponse('/login?check_email=1',303)
+    r=RedirectResponse("/dashboard",303)
+    if AUTH_ENABLED: set_auth_cookies(r,auth,COOKIE_SECURE)
+    else: r.set_cookie("ll_session",sign(str(uid)),httponly=True,samesite="lax",secure=COOKIE_SECURE)
+    return r
 @app.get("/login",response_class=HTMLResponse)
 def login_page(request:Request): return page(request,"login.html")
 @app.post("/login")
 def login(email:str=Form(...),password:str=Form(...)):
+    from .supabase_auth import AUTH_ENABLED, sign_in, set_auth_cookies
+    if AUTH_ENABLED:
+        auth=sign_in(email.lower().strip(),password); sid=(auth.get('user') or {}).get('id')
+        with db() as con:
+            u=con.execute('SELECT * FROM users WHERE supabase_user_id=? OR email=?',(sid,email.lower().strip())).fetchone()
+            if u and not u['supabase_user_id']: con.execute('UPDATE users SET supabase_user_id=? WHERE id=?',(sid,u['id']))
+        if not u or not u['active']: raise HTTPException(403,'LocalLoop account unavailable')
+        r=RedirectResponse('/dashboard',303); set_auth_cookies(r,auth,COOKIE_SECURE); return r
     with db() as con: u=con.execute("SELECT * FROM users WHERE email=?",(email.lower().strip(),)).fetchone()
     if not u or not verify_password(password,u["password_hash"]): raise HTTPException(400,"Invalid credentials")
     r=RedirectResponse("/dashboard",303); r.set_cookie("ll_session",sign(str(u["id"])),httponly=True,samesite="lax",secure=COOKIE_SECURE); return r
 @app.post("/logout")
 def logout():
-    r=RedirectResponse("/",303); r.delete_cookie("ll_session"); return r
+    from .supabase_auth import clear_auth_cookies
+    r=RedirectResponse("/",303); clear_auth_cookies(r); return r
 @app.get("/dashboard",response_class=HTMLResponse)
 def dashboard(request:Request):
     u=require_user(request)

@@ -3,6 +3,7 @@ import sqlite3
 from fastapi import Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from .main import app, now, page, hash_password, sign, COOKIE_SECURE, require_user
+from .supabase_auth import AUTH_ENABLED, sign_up, set_auth_cookies
 from .database import db
 
 TERMS_VERSION='2026-09-14'
@@ -123,9 +124,11 @@ def legal_register(request:Request,email:str=Form(...),password:str=Form(...),na
     if age_18!='yes': raise HTTPException(400,'You must confirm you are at least 18 to create an account during the LocalLoop pilot.')
     if accept_terms!='yes' or accept_privacy!='yes': raise HTTPException(400,'You must accept the Terms of Use and acknowledge the Privacy Policy to create an account.')
     if role=='driver' and accept_driver!='yes': raise HTTPException(400,'Independent drivers must accept the Driver Agreement.')
+    auth=sign_up(email.lower().strip(),password,name.strip(),role) if AUTH_ENABLED else None
+    sid=(auth.get('user') or {}).get('id') if auth else None
     try:
         with db() as con:
-            cur=con.execute('INSERT INTO users(email,password_hash,name,role,created_at) VALUES(?,?,?,?,?)',(email.lower().strip(),hash_password(password),name.strip(),role,now())); uid=cur.lastrowid
+            cur=con.execute('INSERT INTO users(email,password_hash,name,role,created_at,supabase_user_id) VALUES(?,?,?,?,?,?)',(email.lower().strip(),hash_password(password) if not AUTH_ENABLED else 'supabase-managed',name.strip(),role,now(),sid)); uid=cur.lastrowid
             if role=='driver': con.execute('INSERT INTO driver_profiles(user_id) VALUES(?)',(uid,))
             if role=='business': con.execute('INSERT INTO business_profiles(user_id,business_name) VALUES(?,?)',(uid,business_name.strip() or name.strip()))
             ip=(request.client.host if request.client else '')[:64]
@@ -133,4 +136,8 @@ def legal_register(request:Request,email:str=Form(...),password:str=Form(...),na
             con.execute('INSERT INTO legal_acceptances(user_id,document_type,version,accepted_at,ip_note) VALUES(?,?,?,?,?)',(uid,'privacy',PRIVACY_VERSION,now(),ip))
             if role=='driver': con.execute('INSERT INTO legal_acceptances(user_id,document_type,version,accepted_at,ip_note) VALUES(?,?,?,?,?)',(uid,'driver_agreement',DRIVER_VERSION,now(),ip))
     except sqlite3.IntegrityError: raise HTTPException(400,'Email already exists')
-    r=RedirectResponse('/account/verification' if role in {'customer','business'} else '/dashboard',303); r.set_cookie('ll_session',sign(str(uid)),httponly=True,samesite='lax',secure=COOKIE_SECURE); return r
+    if AUTH_ENABLED and not auth.get('access_token'): return RedirectResponse('/login?check_email=1',303)
+    r=RedirectResponse('/account/verification' if role in {'customer','business'} else '/dashboard',303)
+    if AUTH_ENABLED: set_auth_cookies(r,auth,COOKIE_SECURE)
+    else: r.set_cookie('ll_session',sign(str(uid)),httponly=True,samesite='lax',secure=COOKIE_SECURE)
+    return r
