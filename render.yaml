@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: localloop
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: LOCALLOOP_SECRET
+        generateValue: true
+      - key: LOCALLOOP_DB
+        value: /tmp/localloop.db
+      - key: PLATFORM_FEE_CENTS
+        value: 150
+      - key: BASE_FARE_CENTS
+        value: 500
+      - key: PER_MILE_CENTS
+        value: 120
+      - key: SURGE_MULTIPLIER
+        value: 1.0
+      - key: LOCALLOOP_COOKIE_SECURE
+        value: "1"
+      - key: LOCALLOOP_ADMIN_EMAIL
+        value: admin@localloop.local
+      - key: LOCALLOOP_ADMIN_PASSWORD
+        generateValue: true
