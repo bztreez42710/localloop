@@ -99,3 +99,6 @@ def portal_dashboard(request:Request):
             return page(request,'driver.html',profile=prof,available=available,mine=mine)
         mine=con.execute('SELECT d.*,dr.name driver FROM deliveries d LEFT JOIN users dr ON dr.id=d.driver_id WHERE d.customer_id=? OR d.business_id=? ORDER BY d.id DESC',(u['id'],u['id'])).fetchall()
         return page(request,'customer.html',deliveries=mine)
+
+# Load independent multi-store shopping routes after core routes are registered.
+from . import marketplace  # noqa: E402,F401
