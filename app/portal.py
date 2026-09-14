@@ -90,3 +90,4 @@ from . import payments  # noqa: E402,F401
 from . import routing  # noqa: E402,F401
 from . import legal  # noqa: E402,F401
 from . import community_marketplace  # noqa: E402,F401
+from . import marketplace_payments  # noqa: E402,F401
