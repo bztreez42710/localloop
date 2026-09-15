@@ -46,6 +46,7 @@ class PgConnection:
         from psycopg.rows import dict_row
         self._psycopg=psycopg
         self._con=psycopg.connect(DATABASE_URL,row_factory=dict_row)
+        self._savepoint_seq=0
     def execute(self,sql,params=()):
         adapted,forced_params,_=_adapt(sql)
         if forced_params is not None: params=forced_params
@@ -53,14 +54,34 @@ class PgConnection:
         table=table_match.group(1).lower() if table_match else None
         wants_id=table in _ID_TABLES and 'RETURNING ' not in adapted.upper()
         if wants_id: adapted=adapted.rstrip().rstrip(';')+' RETURNING id'
+        # A number of legacy startup migrations intentionally probe schema and catch
+        # database errors. SQLite allows the next statement to continue, while
+        # PostgreSQL marks the whole transaction failed. Isolate each statement in
+        # a savepoint so a caught compatibility/probe error cannot poison the rest
+        # of application startup.
+        self._savepoint_seq += 1
+        sp=f'll_stmt_{self._savepoint_seq}'
+        ctl=self._con.cursor()
+        ctl.execute(f'SAVEPOINT {sp}')
         try:
             cur=self._con.cursor(); cur.execute(adapted,params or ())
             last=None
             if wants_id:
                 row=cur.fetchone(); last=(row or {}).get('id') if isinstance(row,dict) else (row[0] if row else None)
+            ctl.execute(f'RELEASE SAVEPOINT {sp}')
             return PgCursor(cur,last)
-        except self._psycopg.errors.UniqueViolation as e:
-            raise sqlite3.IntegrityError(str(e)) from e
+        except Exception as e:
+            # Recover the PostgreSQL transaction before propagating the original
+            # exception. Callers that deliberately catch schema-probe errors can
+            # then safely execute their next statement, matching SQLite behavior.
+            try:
+                ctl.execute(f'ROLLBACK TO SAVEPOINT {sp}')
+                ctl.execute(f'RELEASE SAVEPOINT {sp}')
+            except Exception:
+                self._con.rollback()
+            if isinstance(e,self._psycopg.errors.UniqueViolation):
+                raise sqlite3.IntegrityError(str(e)) from e
+            raise
     def executescript(self,script):
         for stmt in script.split(';'):
             if stmt.strip(): self.execute(stmt)
