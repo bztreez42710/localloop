@@ -1,6 +1,7 @@
 from __future__ import annotations
 from urllib.parse import quote
-import base64
+from functools import lru_cache
+import base64, struct, zlib, binascii
 from fastapi import Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from .main import app, db, page, user_from_request, now, event, notify
@@ -16,7 +17,25 @@ def _safe_image(data:str,max_bytes:int=1_750_000)->str:
     if len(raw)>max_bytes: raise HTTPException(400,'Photo is too large. Please use a smaller image.')
     return data
 
-# Replace legacy driver action endpoints after all earlier modules have loaded.
+@lru_cache(maxsize=4)
+def _icon_png(size:int)->bytes:
+    def chunk(kind:bytes,data:bytes)->bytes:
+        return struct.pack('>I',len(data))+kind+data+struct.pack('>I',binascii.crc32(kind+data)&0xffffffff)
+    raw=bytearray()
+    for y in range(size):
+        raw.append(0)
+        for x in range(size):
+            lime=(183,255,60,255); dark=(7,17,31,255); purple=(109,93,252,255)
+            # Simple LocalLoop L mark and accent dot on a lime tile.
+            left=size*0.29 <= x <= size*0.43 and size*0.23 <= y <= size*0.75
+            bottom=size*0.29 <= x <= size*0.72 and size*0.62 <= y <= size*0.75
+            dx=x-size*0.72; dy=y-size*0.29; dot=(dx*dx+dy*dy) <= (size*0.09)**2
+            px=purple if dot else (dark if left or bottom else lime)
+            raw.extend(px)
+    sig=b'\x89PNG\r\n\x1a\n'
+    ihdr=struct.pack('>IIBBBBB',size,size,8,6,0,0,0)
+    return sig+chunk(b'IHDR',ihdr)+chunk(b'IDAT',zlib.compress(bytes(raw),9))+chunk(b'IEND',b'')
+
 for r in list(app.router.routes):
     p=getattr(r,'path',None); methods=getattr(r,'methods',set()) or set()
     if p in {'/deliveries/{did}/accept','/deliveries/{did}/status'} and 'POST' in methods:
@@ -85,11 +104,16 @@ def driver_icon():
     svg='''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#b7ff3c"/><path d="M148 118h76v210h140v66H148z" fill="#07111f"/><circle cx="362" cy="150" r="46" fill="#6d5dfc"/></svg>'''
     return Response(svg,media_type='image/svg+xml',headers={'Cache-Control':'public, max-age=86400'})
 
+@app.get('/driver/icon-192.png')
+def driver_icon_192(): return Response(_icon_png(192),media_type='image/png',headers={'Cache-Control':'public, max-age=86400'})
+@app.get('/driver/icon-512.png')
+def driver_icon_512(): return Response(_icon_png(512),media_type='image/png',headers={'Cache-Control':'public, max-age=86400'})
+
 @app.get('/driver/manifest.webmanifest')
 def driver_manifest():
-    return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[{'src':'/driver/icon.svg','sizes':'any','type':'image/svg+xml','purpose':'any maskable'}]},media_type='application/manifest+json')
+    return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[{'src':'/driver/icon-192.png','sizes':'192x192','type':'image/png','purpose':'any maskable'},{'src':'/driver/icon-512.png','sizes':'512x512','type':'image/png','purpose':'any maskable'}]},media_type='application/manifest+json')
 
 @app.get('/driver/sw.js')
 def driver_service_worker():
-    js="""const C='localloop-driver-v6';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
+    js="""const C='localloop-driver-v7';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
     return Response(js,media_type='application/javascript',headers={'Service-Worker-Allowed':'/driver/','Cache-Control':'no-store'})
