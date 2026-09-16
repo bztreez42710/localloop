@@ -1,8 +1,16 @@
 from __future__ import annotations
 from urllib.parse import quote
-from fastapi import Request
+from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
-from .main import app, db, page, user_from_request, now
+from .main import app, db, page, user_from_request, now, event, notify
+
+STATUS_LABELS={'posted':'Looking for a driver','accepted':'Driver accepted','picked_up':'Picked up','delivered':'Delivered','cancelled':'Cancelled'}
+def friendly(v): return STATUS_LABELS.get((v or '').lower(),(v or '').replace('_',' ').title())
+
+# Replace the legacy accept endpoint so driver actions stay inside the driver app.
+for r in list(app.router.routes):
+    if getattr(r,'path',None)=='/deliveries/{did}/accept' and 'POST' in (getattr(r,'methods',set()) or set()):
+        app.router.routes.remove(r)
 
 @app.get('/driver/app', response_class=HTMLResponse)
 def driver_app(request: Request):
@@ -10,37 +18,36 @@ def driver_app(request: Request):
     if not u or u['role']!='driver':
         return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
     with db() as con:
+        con.execute('INSERT OR IGNORE INTO driver_profiles(user_id) VALUES(?)',(u['id'],))
         profile=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         available=con.execute("SELECT d.*,u.name customer FROM deliveries d JOIN users u ON u.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC LIMIT 40").fetchall()
         mine=con.execute("SELECT * FROM deliveries WHERE driver_id=? AND status IN ('accepted','picked_up') ORDER BY id DESC",(u['id'],)).fetchall()
-    return page(request,'driver_app.html',profile=profile,available=available,mine=mine)
+        compliance=con.execute('SELECT * FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
+    notice=request.query_params.get('notice','')
+    return page(request,'driver_app.html',profile=profile,available=available,mine=mine,compliance=compliance,friendly=friendly,notice=notice)
+
+@app.post('/deliveries/{did}/accept')
+def driver_accept_delivery(did:int,request:Request):
+    u=user_from_request(request)
+    if not u: return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
+    if u['role']!='driver': raise HTTPException(403)
+    with db() as con:
+        p=con.execute('SELECT online FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
+        c=con.execute('SELECT identity_status,background_status,insurance_status FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
+        ready=bool(c and c['identity_status']=='approved' and c['background_status']=='approved' and c['insurance_status']=='approved')
+        if not ready: return RedirectResponse('/driver/setup?verification_required=1',303)
+        if not p or not p['online']: return RedirectResponse('/driver/app?notice=go_online#offers',303)
+        cur=con.execute("UPDATE deliveries SET driver_id=?,status='accepted',accepted_at=?,updated_at=? WHERE id=? AND status='posted'",(u['id'],now(),now(),did))
+        if cur.rowcount!=1: return RedirectResponse('/driver/app?notice=already_claimed#offers',303)
+        d=con.execute('SELECT * FROM deliveries WHERE id=?',(did,)).fetchone()
+        event(con,did,u['id'],'accepted'); notify(con,d['customer_id'],'Driver assigned',f'Delivery #{did} was accepted.')
+    return RedirectResponse('/driver/app#active',303)
 
 @app.get('/driver/login', response_class=HTMLResponse)
 def driver_login_page(request:Request,next:str='/driver/app',error:int=0,wrong:int=0):
     u=user_from_request(request)
     if u and u['role']=='driver': return RedirectResponse('/driver/app',303)
     return page(request,'driver_login.html',next_path='/driver/app',error=bool(error),logged_user=u)
-
-# Override the generic onboarding completion route after ux.py loads.
-# Drivers should finish onboarding into the Driver App, not bounce through
-# /dashboard where the generic onboarding gate could send them back again.
-for r in list(app.router.routes):
-    if getattr(r,'path',None)=='/onboarding/complete' and 'POST' in (getattr(r,'methods',set()) or set()):
-        app.router.routes.remove(r)
-
-@app.post('/onboarding/complete')
-def driver_safe_onboarding_complete(request:Request):
-    u=user_from_request(request)
-    if not u:
-        return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
-    t=now()
-    with db() as con:
-        row=con.execute('SELECT user_id FROM onboarding_progress WHERE user_id=?',(u['id'],)).fetchone()
-        if row:
-            con.execute('UPDATE onboarding_progress SET completed_at=?,updated_at=? WHERE user_id=?',(t,t,u['id']))
-        else:
-            con.execute('INSERT INTO onboarding_progress(user_id,completed_at,updated_at) VALUES(?,?,?)',(u['id'],t,t))
-    return RedirectResponse('/driver/app' if u['role']=='driver' else '/dashboard',303)
 
 @app.get('/driver/manifest.webmanifest')
 def driver_manifest():
