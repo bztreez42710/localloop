@@ -90,9 +90,10 @@ def driver_online_production(request:Request,online:int=Form(...)):
     if u['role']!='driver': raise HTTPException(403)
     with db() as con:
         con.execute('INSERT OR IGNORE INTO driver_compliance(user_id,updated_at) VALUES(?,?)',(u['id'],now())); c=con.execute('SELECT * FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
-        if online and (not c or c['identity_status']!='approved' or c['background_status']!='approved' or c['insurance_status']!='approved'): raise HTTPException(403,'Driver verification is not complete. Finish Driver Setup and wait for approval before going online.')
+        if online and (not c or c['identity_status']!='approved' or c['background_status']!='approved' or c['insurance_status']!='approved'):
+            return RedirectResponse('/driver/setup?verification_required=1',303)
         con.execute('UPDATE driver_profiles SET online=? WHERE user_id=?',(1 if online else 0,u['id']))
-    return RedirectResponse('/dashboard',303)
+    return RedirectResponse('/driver/app',303)
 
 @app.get('/admin/drivers',response_class=HTMLResponse)
 def admin_drivers(request:Request):
@@ -137,7 +138,7 @@ def api_notifications(request:Request):
     return JSONResponse([dict(r) for r in rows])
 
 @app.post('/deliveries/{did}/status')
-def delivery_status_production(did:int,request:Request,status:str=Form(...),proof:str=Form(''),proof_photo:str=Form('')):
+def delivery_status_production(did:int,request:Request,status:str=Form(...),proof:str=Form(''),proof_photo:str=Form(''),handoff_code:str=Form('')):
     u=require_user(request)
     if u['role']!='driver': raise HTTPException(403)
     photo=_safe_image(proof_photo) if proof_photo else ''
@@ -148,6 +149,6 @@ def delivery_status_production(did:int,request:Request,status:str=Form(...),proo
         elif status=='delivered' and d['status']=='picked_up':
             con.execute("UPDATE deliveries SET status='delivered',proof=?,proof_photo=?,delivered_at=?,updated_at=? WHERE id=?",(proof.strip(),photo,now(),now(),did)); con.execute('UPDATE driver_profiles SET completed=completed+1,payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(d['driver_pay_cents'],u['id']))
             con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,?,?,?,?,?)',(u['id'],did,'driver_earning',d['driver_pay_cents'],'Delivery earning',now())); con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(NULL,?,?,?,?,?)',(did,'platform_fee',d['platform_fee_cents'],'Platform revenue',now()))
-        else: raise HTTPException(400,'Invalid transition')
+        else: return RedirectResponse('/driver/app?status_error=1#active',303)
         event(con,did,u['id'],status); notify(con,d['customer_id'],'Delivery update',f"Delivery #{did}: {status.replace('_',' ')}")
-    return RedirectResponse('/dashboard',303)
+    return RedirectResponse('/driver/app#active',303)
