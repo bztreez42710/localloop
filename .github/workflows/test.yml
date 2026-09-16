@@ -12,4 +12,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
-      - run: pytest -q
+      - name: Run full LocalLoop test suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m pytest -q
