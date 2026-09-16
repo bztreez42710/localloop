@@ -129,4 +129,5 @@ from . import refunds  # noqa: E402,F401
 from . import verification  # noqa: E402,F401
 from . import storage_integration  # noqa: E402,F401
 from . import infrastructure  # noqa: E402,F401
+from . import job_board  # noqa: E402,F401
 from . import security  # noqa: E402,F401
