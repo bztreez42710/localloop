@@ -15,4 +15,10 @@ jobs:
       - name: Run full LocalLoop test suite
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m pytest -q
+        run: python -m pytest -q 2>&1 | tee pytest-output.txt
+      - name: Save test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.txt
