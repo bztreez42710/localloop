@@ -78,10 +78,11 @@ def driver_setup_save(request:Request,background_consent:int=Form(0),insurance_c
     if u['role']!='driver': raise HTTPException(403)
     last4=re.sub(r'\D','',insurance_policy_last4)[-4:]
     if payout_email and '@' not in payout_email: raise HTTPException(400,'Enter a valid payout contact email.')
+    if insurance_policy_last4 and len(last4)!=4: raise HTTPException(400,'Enter the last 4 digits of your insurance policy number.')
     with db() as con:
         con.execute('INSERT OR IGNORE INTO driver_compliance(user_id,updated_at) VALUES(?,?)',(u['id'],now()))
         con.execute('UPDATE driver_compliance SET background_consent=?,insurance_company=?,insurance_policy_last4=?,insurance_expires=?,payout_email=?,updated_at=? WHERE user_id=?',(1 if background_consent else 0,insurance_company.strip(),last4,insurance_expires.strip(),payout_email.strip().lower(),now(),u['id']))
-    return RedirectResponse('/driver/setup',303)
+    return RedirectResponse('/driver/verify/status?setup_saved=1',303)
 
 @app.post('/driver/online')
 def driver_online_production(request:Request,online:int=Form(...)):
