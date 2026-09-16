@@ -18,8 +18,7 @@ from app.portal import app
 
 def login(c,e,p,portal='any'): return c.post('/login',data={'email':e,'password':p,'portal':portal},follow_redirects=False)
 def register(c,e,p,n,r,b=''): return c.post('/register',data={'email':e,'password':p,'name':n,'role':r,'business_name':b},follow_redirects=False)
-def accept_legal(c):
-    return c.post('/legal/acceptance',data={'accept_terms':'yes','accept_privacy':'yes','accept_driver':'yes'},follow_redirects=False)
+def accept_legal(c): return c.post('/legal/acceptance',data={'accept_terms':'yes','accept_privacy':'yes','accept_driver':'yes'},follow_redirects=False)
 
 def test_public_pages_and_auth_guards():
     with TestClient(app) as c:
@@ -30,50 +29,39 @@ def test_public_pages_and_auth_guards():
 
 def test_every_role_and_core_workflows():
     with TestClient(app) as c:
-        # Owner/admin
-        assert login(c,'owner@test.local','OwnerPass123!','admin').status_code==303
-        accept_legal(c)
-        assert c.get('/dashboard').status_code==200
-        assert c.get('/shopping/ops').status_code==200
-        assert c.get('/admin/jobs').status_code==200
-        c.post('/logout')
-        # read-only monitors
-        assert login(c,'safety@test.local','SafetyPass123!','safety').status_code==303
-        accept_legal(c)
-        assert c.get('/dashboard').status_code==200
-        assert c.post('/deliveries',data={'pickup':'A','dropoff':'B','item_description':'X','distance_miles':'1','notes':''}).status_code==403
-        c.post('/logout')
-        assert login(c,'developer@test.local','DeveloperPass123!','developer').status_code==303
-        accept_legal(c); assert c.get('/dashboard').status_code==200; c.post('/logout')
-        # Customer
-        assert register(c,'customer@test.local','Customer123!','Test Customer','customer').status_code==303
-        accept_legal(c)
-        with DB.open('rb') if False else open(os.devnull,'rb'): pass
-        # Test fixtures may require account verification in newer builds; owner/admin can still post tasks.
-        c.post('/logout')
-        # Business
-        assert register(c,'store@test.local','StorePass123!','Test Store','business','Test Store').status_code==303
-        accept_legal(c); c.post('/logout')
-        # Driver
-        assert register(c,'driver@test.local','DriverPass123!','Test Driver','driver').status_code==303
-        accept_legal(c)
-        assert c.get('/driver/shop').status_code==200
-        c.post('/logout')
+        assert login(c,'owner@test.local','OwnerPass123!','admin').status_code==303; accept_legal(c)
+        assert c.get('/dashboard').status_code==200; assert c.get('/shopping/ops').status_code==200; assert c.get('/admin/jobs').status_code==200; c.post('/logout')
+        assert login(c,'safety@test.local','SafetyPass123!','safety').status_code==303; accept_legal(c); assert c.get('/dashboard').status_code==200
+        assert c.post('/deliveries',data={'pickup':'A','dropoff':'B','item_description':'X','distance_miles':'1','notes':''}).status_code==403; c.post('/logout')
+        assert login(c,'developer@test.local','DeveloperPass123!','developer').status_code==303; accept_legal(c); assert c.get('/dashboard').status_code==200; c.post('/logout')
+        assert register(c,'customer@test.local','Customer123!','Test Customer','customer').status_code==303; accept_legal(c); c.post('/logout')
+        assert register(c,'store@test.local','StorePass123!','Test Store','business','Test Store').status_code==303; accept_legal(c); c.post('/logout')
+        assert register(c,'driver@test.local','DriverPass123!','Test Driver','driver').status_code==303; accept_legal(c)
+        assert c.get('/driver/shop').status_code==200; assert c.get('/driver/app').status_code==200
+        assert c.get('/driver/offers.json').status_code==200; c.post('/logout')
         assert login(c,'driver@test.local','DriverPass123!','customer').status_code==403
+
+def test_driver_pwa_notification_regression_20_cycles():
+    with TestClient(app) as c:
+        # Public install assets must remain valid through repeated mobile refreshes.
+        for i in range(20):
+            m=c.get('/driver/manifest.webmanifest'); assert m.status_code==200 and m.json()['start_url']=='/driver/app'
+            assert c.get('/driver/icon-192.png').status_code==200
+            assert c.get('/driver/icon-512.png').status_code==200
+            sw=c.get('/driver/sw.js'); assert sw.status_code==200 and 'notificationclick' in sw.text
+            assert c.get('/driver/offers.json').status_code==401
+        assert login(c,'driver@test.local','DriverPass123!','any').status_code==303
+        for i in range(20):
+            page=c.get('/driver/app'); assert page.status_code==200
+            assert 'Enable alerts' in page.text and '/driver/offers.json' in page.text and 'setInterval(checkOffers,15000)' in page.text
+            offers=c.get('/driver/offers.json'); assert offers.status_code==200
+            body=offers.json(); assert 'online' in body and 'offers' in body and isinstance(body['offers'],list)
 
 def test_task_board_owner_lifecycle_and_safety():
     with TestClient(app) as c:
-        assert login(c,'owner@test.local','OwnerPass123!','admin').status_code==303
-        accept_legal(c)
-        assert c.get('/jobs').status_code==200
-        r=c.post('/jobs',data={'title':'Help organize garage','description':'Move labeled storage boxes onto shelves for one hour.','category':'home','neighborhood':'Spokane','location_note':'General location shared after acceptance','offered_dollars':'40','timing_text':'Saturday afternoon','lawful_attestation':'yes'},follow_redirects=False)
-        assert r.status_code==303
+        assert login(c,'owner@test.local','OwnerPass123!','admin').status_code==303; accept_legal(c); assert c.get('/jobs').status_code==200
+        r=c.post('/jobs',data={'title':'Help organize garage','description':'Move labeled storage boxes onto shelves for one hour.','category':'home','neighborhood':'Spokane','location_note':'General location shared after acceptance','offered_dollars':'40','timing_text':'Saturday afternoon','lawful_attestation':'yes'},follow_redirects=False); assert r.status_code==303
         assert c.get('/jobs?view=mine').status_code==200
-        # prohibited work is rejected before publication
-        r=c.post('/jobs',data={'title':'Move ammunition','description':'Move ammunition boxes to another room safely.','category':'moving','neighborhood':'Spokane','location_note':'','offered_dollars':'40','timing_text':'','lawful_attestation':'yes'},follow_redirects=False)
-        assert r.status_code==400
-        # owner cannot accept own task
+        r=c.post('/jobs',data={'title':'Move ammunition','description':'Move ammunition boxes to another room safely.','category':'moving','neighborhood':'Spokane','location_note':'','offered_dollars':'40','timing_text':'','lawful_attestation':'yes'},follow_redirects=False); assert r.status_code==400
         assert c.post('/jobs/1/accept',follow_redirects=False).status_code==400
-        # cancellation works
-        assert c.post('/jobs/1/cancel',follow_redirects=False).status_code==303
-        assert c.get('/admin/jobs').status_code==200
+        assert c.post('/jobs/1/cancel',follow_redirects=False).status_code==303; assert c.get('/admin/jobs').status_code==200
