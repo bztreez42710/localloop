@@ -2,7 +2,7 @@ from __future__ import annotations
 from urllib.parse import quote
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
-from .main import app, db, page, user_from_request
+from .main import app, db, page, user_from_request, now
 
 @app.get('/driver/app', response_class=HTMLResponse)
 def driver_app(request: Request):
@@ -21,11 +21,32 @@ def driver_login_page(request:Request,next:str='/driver/app',error:int=0,wrong:i
     if u and u['role']=='driver': return RedirectResponse('/driver/app',303)
     return page(request,'driver_login.html',next_path='/driver/app',error=bool(error),logged_user=u)
 
+# Override the generic onboarding completion route after ux.py loads.
+# Drivers should finish onboarding into the Driver App, not bounce through
+# /dashboard where the generic onboarding gate could send them back again.
+for r in list(app.router.routes):
+    if getattr(r,'path',None)=='/onboarding/complete' and 'POST' in (getattr(r,'methods',set()) or set()):
+        app.router.routes.remove(r)
+
+@app.post('/onboarding/complete')
+def driver_safe_onboarding_complete(request:Request):
+    u=user_from_request(request)
+    if not u:
+        return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
+    t=now()
+    with db() as con:
+        row=con.execute('SELECT user_id FROM onboarding_progress WHERE user_id=?',(u['id'],)).fetchone()
+        if row:
+            con.execute('UPDATE onboarding_progress SET completed_at=?,updated_at=? WHERE user_id=?',(t,t,u['id']))
+        else:
+            con.execute('INSERT INTO onboarding_progress(user_id,completed_at,updated_at) VALUES(?,?,?)',(u['id'],t,t))
+    return RedirectResponse('/driver/app' if u['role']=='driver' else '/dashboard',303)
+
 @app.get('/driver/manifest.webmanifest')
 def driver_manifest():
     return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[]},media_type='application/manifest+json')
 
 @app.get('/driver/sw.js')
 def driver_service_worker():
-    js="""const C='localloop-driver-v3';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
+    js="""const C='localloop-driver-v4';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
     return Response(js,media_type='application/javascript',headers={'Service-Worker-Allowed':'/driver/','Cache-Control':'no-store'})
