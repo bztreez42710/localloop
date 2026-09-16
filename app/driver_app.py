@@ -1,14 +1,25 @@
 from __future__ import annotations
 from urllib.parse import quote
-from fastapi import Request, HTTPException
+import base64
+from fastapi import Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from .main import app, db, page, user_from_request, now, event, notify
 
 STATUS_LABELS={'posted':'Looking for a driver','accepted':'Driver accepted','picked_up':'Picked up','delivered':'Delivered','cancelled':'Cancelled'}
 def friendly(v): return STATUS_LABELS.get((v or '').lower(),(v or '').replace('_',' ').title())
 
+def _safe_image(data:str,max_bytes:int=1_750_000)->str:
+    if not data: return ''
+    if not data.startswith('data:image/'): raise HTTPException(400,'Photo proof must be an image.')
+    try: raw=base64.b64decode(data.split(',',1)[1],validate=False)
+    except Exception: raise HTTPException(400,'Could not read photo proof.')
+    if len(raw)>max_bytes: raise HTTPException(400,'Photo is too large. Please use a smaller image.')
+    return data
+
+# Replace legacy driver action endpoints after all earlier modules have loaded.
 for r in list(app.router.routes):
-    if getattr(r,'path',None)=='/deliveries/{did}/accept' and 'POST' in (getattr(r,'methods',set()) or set()):
+    p=getattr(r,'path',None); methods=getattr(r,'methods',set()) or set()
+    if p in {'/deliveries/{did}/accept','/deliveries/{did}/status'} and 'POST' in methods:
         app.router.routes.remove(r)
 
 @app.get('/driver/app', response_class=HTMLResponse)
@@ -42,6 +53,27 @@ def driver_accept_delivery(did:int,request:Request):
         event(con,did,u['id'],'accepted'); notify(con,d['customer_id'],'Driver assigned',f'Delivery #{did} was accepted.')
     return RedirectResponse('/driver/app#active',303)
 
+@app.post('/deliveries/{did}/status')
+def driver_delivery_status(did:int,request:Request,status:str=Form(...),proof:str=Form(''),proof_photo:str=Form(''),handoff_code:str=Form('')):
+    u=user_from_request(request)
+    if not u: return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
+    if u['role']!='driver': raise HTTPException(403)
+    photo=_safe_image(proof_photo) if proof_photo else ''
+    with db() as con:
+        d=con.execute('SELECT * FROM deliveries WHERE id=? AND driver_id=?',(did,u['id'])).fetchone()
+        if not d: return RedirectResponse('/driver/app?notice=delivery_missing#active',303)
+        if status=='picked_up' and d['status']=='accepted':
+            con.execute("UPDATE deliveries SET status='picked_up',picked_up_at=?,updated_at=? WHERE id=?",(now(),now(),did))
+        elif status=='delivered' and d['status']=='picked_up':
+            con.execute("UPDATE deliveries SET status='delivered',proof=?,proof_photo=?,delivered_at=?,updated_at=? WHERE id=?",(proof.strip(),photo,now(),now(),did))
+            con.execute('UPDATE driver_profiles SET completed=completed+1,payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(d['driver_pay_cents'],u['id']))
+            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,?,?,?,?,?)',(u['id'],did,'driver_earning',d['driver_pay_cents'],'Delivery earning',now()))
+            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(NULL,?,?,?,?,?)',(did,'platform_fee',d['platform_fee_cents'],'Platform revenue',now()))
+        else:
+            return RedirectResponse('/driver/app?notice=invalid_status#active',303)
+        event(con,did,u['id'],status); notify(con,d['customer_id'],'Delivery update',f"Delivery #{did}: {status.replace('_',' ')}")
+    return RedirectResponse('/driver/app#active',303)
+
 @app.get('/driver/login', response_class=HTMLResponse)
 def driver_login_page(request:Request,next:str='/driver/app',error:int=0,wrong:int=0):
     u=user_from_request(request)
@@ -59,5 +91,5 @@ def driver_manifest():
 
 @app.get('/driver/sw.js')
 def driver_service_worker():
-    js="""const C='localloop-driver-v5';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
+    js="""const C='localloop-driver-v6';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
     return Response(js,media_type='application/javascript',headers={'Service-Worker-Allowed':'/driver/','Cache-Control':'no-store'})
