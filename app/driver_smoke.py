@@ -9,7 +9,7 @@ EMAIL=os.environ.get('LOCALLOOP_DEMO_DRIVER_EMAIL','').strip()
 PASSWORD=os.environ.get('LOCALLOOP_DEMO_DRIVER_PASSWORD','')
 
 async def _smoke():
-    await asyncio.sleep(4)
+    await asyncio.sleep(15)
     if not EMAIL or not PASSWORD:
         print('DRIVER_SMOKE_SKIPPED no demo credentials',flush=True); return
     did=None; driver_id=None; original_profile=None
