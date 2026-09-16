@@ -7,7 +7,6 @@ from .main import app, db, page, user_from_request, now, event, notify
 STATUS_LABELS={'posted':'Looking for a driver','accepted':'Driver accepted','picked_up':'Picked up','delivered':'Delivered','cancelled':'Cancelled'}
 def friendly(v): return STATUS_LABELS.get((v or '').lower(),(v or '').replace('_',' ').title())
 
-# Replace the legacy accept endpoint so driver actions stay inside the driver app.
 for r in list(app.router.routes):
     if getattr(r,'path',None)=='/deliveries/{did}/accept' and 'POST' in (getattr(r,'methods',set()) or set()):
         app.router.routes.remove(r)
@@ -49,11 +48,16 @@ def driver_login_page(request:Request,next:str='/driver/app',error:int=0,wrong:i
     if u and u['role']=='driver': return RedirectResponse('/driver/app',303)
     return page(request,'driver_login.html',next_path='/driver/app',error=bool(error),logged_user=u)
 
+@app.get('/driver/icon.svg')
+def driver_icon():
+    svg='''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#b7ff3c"/><path d="M148 118h76v210h140v66H148z" fill="#07111f"/><circle cx="362" cy="150" r="46" fill="#6d5dfc"/></svg>'''
+    return Response(svg,media_type='image/svg+xml',headers={'Cache-Control':'public, max-age=86400'})
+
 @app.get('/driver/manifest.webmanifest')
 def driver_manifest():
-    return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[]},media_type='application/manifest+json')
+    return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[{'src':'/driver/icon.svg','sizes':'any','type':'image/svg+xml','purpose':'any maskable'}]},media_type='application/manifest+json')
 
 @app.get('/driver/sw.js')
 def driver_service_worker():
-    js="""const C='localloop-driver-v4';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
+    js="""const C='localloop-driver-v5';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;if(new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
     return Response(js,media_type='application/javascript',headers={'Service-Worker-Allowed':'/driver/','Cache-Control':'no-store'})
