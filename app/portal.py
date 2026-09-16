@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from fastapi import Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from .main import app, db, now, hash_password, verify_password, sign, unsign, page, require_user, COOKIE_SECURE
 OWNER_EMAIL=os.environ.get('LOCALLOOP_OWNER_EMAIL','').strip().lower(); OWNER_PASSWORD=os.environ.get('LOCALLOOP_OWNER_PASSWORD',''); SAFETY_EMAIL=os.environ.get('LOCALLOOP_SAFETY_EMAIL','').strip().lower(); SAFETY_PASSWORD=os.environ.get('LOCALLOOP_SAFETY_PASSWORD',''); DEVELOPER_EMAIL=os.environ.get('LOCALLOOP_DEVELOPER_EMAIL','').strip().lower(); DEVELOPER_PASSWORD=os.environ.get('LOCALLOOP_DEVELOPER_PASSWORD',''); DEMO_DRIVER_EMAIL=os.environ.get('LOCALLOOP_DEMO_DRIVER_EMAIL','').strip().lower(); DEMO_DRIVER_PASSWORD=os.environ.get('LOCALLOOP_DEMO_DRIVER_PASSWORD',''); DEMO_BUSINESS_EMAIL=os.environ.get('LOCALLOOP_DEMO_BUSINESS_EMAIL','').strip().lower(); DEMO_BUSINESS_PASSWORD=os.environ.get('LOCALLOOP_DEMO_BUSINESS_PASSWORD',''); DEMO_CUSTOMER_EMAIL=os.environ.get('LOCALLOOP_DEMO_CUSTOMER_EMAIL','').strip().lower(); DEMO_CUSTOMER_PASSWORD=os.environ.get('LOCALLOOP_DEMO_CUSTOMER_PASSWORD','')
 TERMS_VERSION='2026-09-14'; PRIVACY_VERSION='2026-09-14'; DRIVER_VERSION='2026-09-14'
@@ -41,7 +41,7 @@ async def readonly_staff_guard(request:Request,call_next):
         raw=request.cookies.get('ll_session');uid=unsign(raw) if raw else None
         if uid and uid.isdigit():
             with db() as con:
-                if con.execute('SELECT 1 FROM staff_access WHERE user_id=? AND read_only=1',(int(uid),)).fetchone():raise HTTPException(403,'Safety and developer accounts are read-only.')
+                if con.execute('SELECT 1 FROM staff_access WHERE user_id=? AND read_only=1',(int(uid),)).fetchone():return PlainTextResponse('Safety and developer accounts are read-only.',status_code=403)
     return await call_next(request)
 @app.get('/login',response_class=HTMLResponse)
 def portal_login_page(request:Request):return page(request,'login.html')
