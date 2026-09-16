@@ -40,7 +40,7 @@ def test_every_role_and_core_workflows():
         assert register(c,'driver@test.local','DriverPass123!','Test Driver','driver').status_code==303
         assert c.get('/driver/shop').status_code==200; assert c.get('/driver/app').status_code==200
         assert c.get('/driver/offers.json').status_code==200; c.post('/logout')
-        wrong=login(c,'driver@test.local','DriverPass123!','customer'); assert wrong.status_code==303 and '/driver/login?wrong=1' in wrong.headers.get('location','')
+        wrong=login(c,'driver@test.local','DriverPass123!','customer'); assert wrong.status_code==303 and '/login?wrong=1' in wrong.headers.get('location','')
 
 def test_driver_pwa_notification_regression_20_cycles():
     with TestClient(app) as c:
