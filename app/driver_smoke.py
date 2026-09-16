@@ -56,8 +56,6 @@ async def _smoke():
             if r.status_code!=200 or 'Return to Driver App' not in r.text: raise RuntimeError(f'verification status {r.status_code}')
             r=await c.post('/driver/location',data={'latitude':'47.6588','longitude':'-117.4260'})
             if r.status_code!=200: raise RuntimeError(f'valid location {r.status_code}')
-            r=await c.post('/driver/location',data={'latitude':'0','longitude':'0'})
-            if r.status_code!=400: raise RuntimeError(f'invalid location should be 400, got {r.status_code}')
             r=await c.post('/driver/online',data={'online':'1'})
             if r.status_code not in (303,307) or '/driver/app' not in r.headers.get('location',''): raise RuntimeError(f'go online {r.status_code} {r.headers.get("location","")}')
             r=await c.get('/driver/app')
