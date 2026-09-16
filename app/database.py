@@ -6,7 +6,7 @@ DATABASE_URL=os.environ.get('DATABASE_URL','').strip()
 BASE=Path(__file__).resolve().parent
 SQLITE_PATH=Path(os.environ.get('LOCALLOOP_DB',str(BASE.parent/'localloop.db')))
 
-_ID_TABLES={'users','deliveries','shopping_orders','shopping_stops','delivery_events','notifications','ratings','disputes','promos','ledger','payment_records'}
+_ID_TABLES={'users','deliveries','shopping_orders','shopping_stops','delivery_events','notifications','ratings','disputes','promos','ledger','payment_records','community_tasks','community_task_reports'}
 
 def _adapt(sql:str):
     s=sql.strip()
