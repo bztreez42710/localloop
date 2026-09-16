@@ -40,16 +40,13 @@ def _has_current_legal(con,u):
         required=[('terms',TERMS_VERSION),('privacy',PRIVACY_VERSION)]
         if u['role']=='driver': required.append(('driver_agreement',DRIVER_VERSION))
         return all(con.execute('SELECT 1 FROM legal_acceptances WHERE user_id=? AND document_type=? AND version=?',(u['id'],doc,version)).fetchone() for doc,version in required)
-    except Exception:
-        return False
+    except Exception: return False
 
 def _verified_for_use(con,u):
     if u['role'] not in {'customer','business'}: return True
     try:
-        r=con.execute("SELECT verification_status FROM account_verifications WHERE user_id=?",(u['id'],)).fetchone()
-        return bool(r and r['verification_status']=='verified')
-    except Exception:
-        return False
+        r=con.execute("SELECT verification_status FROM account_verifications WHERE user_id=?",(u['id'],)).fetchone(); return bool(r and r['verification_status']=='verified')
+    except Exception: return False
 
 def _next_for_user(con,u):
     if not _has_current_legal(con,u): return '/legal/acceptance'
@@ -114,20 +111,20 @@ from . import main as _main_module
 from .database import db as _persistent_db
 _main_module.db=_persistent_db
 db=_persistent_db
-
-from . import marketplace  # noqa: E402,F401
-from . import production  # noqa: E402,F401
-from . import payments  # noqa: E402,F401
-from . import routing  # noqa: E402,F401
-from . import legal  # noqa: E402,F401
-from . import community_marketplace  # noqa: E402,F401
-from . import marketplace_payments  # noqa: E402,F401
-from . import admin_accounts  # noqa: E402,F401
-from . import ux  # noqa: E402,F401
-from . import community_plus  # noqa: E402,F401
-from . import refunds  # noqa: E402,F401
-from . import verification  # noqa: E402,F401
-from . import storage_integration  # noqa: E402,F401
-from . import infrastructure  # noqa: E402,F401
-from . import job_board  # noqa: E402,F401
-from . import security  # noqa: E402,F401
+from . import marketplace
+from . import production
+from . import payments
+from . import routing
+from . import legal
+from . import community_marketplace
+from . import marketplace_payments
+from . import admin_accounts
+from . import ux
+from . import community_plus
+from . import refunds
+from . import verification
+from . import storage_integration
+from . import infrastructure
+from . import job_board
+from . import security
+from . import driver_app
