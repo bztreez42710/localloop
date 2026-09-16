@@ -34,9 +34,11 @@ async def _smoke():
         async with httpx.AsyncClient(base_url=BASE,follow_redirects=False,timeout=25.0) as c:
             r=await c.get('/driver/app')
             if r.status_code not in (303,307) or '/driver/login' not in r.headers.get('location',''): raise RuntimeError(f'guest app guard {r.status_code} {r.headers.get("location","")}')
-            for path in ['/driver/manifest.webmanifest','/driver/icon.svg','/driver/sw.js']:
+            for path in ['/driver/manifest.webmanifest','/driver/icon.svg','/driver/icon-192.png','/driver/icon-512.png','/driver/sw.js']:
                 r=await c.get(path)
                 if r.status_code!=200: raise RuntimeError(f'{path} returned {r.status_code}')
+            r=await c.get('/driver/manifest.webmanifest')
+            if 'icon-192.png' not in r.text or 'icon-512.png' not in r.text: raise RuntimeError('PWA manifest missing PNG install icons')
             r=await c.post('/login',data={'email':EMAIL,'password':PASSWORD,'portal':'driver','next':'/driver/app'})
             if r.status_code not in (303,307): raise RuntimeError(f'login returned {r.status_code}')
             if r.headers.get('location','')=='/legal/acceptance':
@@ -51,7 +53,7 @@ async def _smoke():
             r=await c.post('/driver/setup',data={'background_consent':'1','insurance_company':'Smoke Test Carrier','insurance_policy_last4':'1234','insurance_expires':'2030-12-31','payout_email':EMAIL})
             if r.status_code not in (303,307) or '/driver/verify/status' not in r.headers.get('location',''): raise RuntimeError(f'driver setup POST {r.status_code} {r.headers.get("location","")}')
             r=await c.get('/driver/verify/status?setup_saved=1')
-            if r.status_code!=200: raise RuntimeError(f'verification status {r.status_code}')
+            if r.status_code!=200 or 'Return to Driver App' not in r.text: raise RuntimeError(f'verification status {r.status_code}')
             r=await c.post('/driver/location',data={'latitude':'47.6588','longitude':'-117.4260'})
             if r.status_code!=200: raise RuntimeError(f'valid location {r.status_code}')
             r=await c.post('/driver/location',data={'latitude':'0','longitude':'0'})
@@ -64,6 +66,12 @@ async def _smoke():
             if r.status_code not in (303,307) or '/driver/app' not in r.headers.get('location',''): raise RuntimeError(f'accept {r.status_code} {r.headers.get("location","")}')
             r=await c.get('/driver/app')
             if r.status_code!=200 or f'Delivery #{did}' not in r.text or 'Driver accepted' not in r.text: raise RuntimeError(f'active delivery render {r.status_code}')
+            r=await c.get(f'/api/track/{did}')
+            if r.status_code!=200: raise RuntimeError(f'tracking API {r.status_code}')
+            tracking=r.json(); loc=tracking.get('driver') or {}
+            if round(float(loc.get('latitude',0)),4)!=47.6588 or round(float(loc.get('longitude',0)),4)!=-117.4260: raise RuntimeError(f'tracking coordinates wrong {tracking}')
+            r=await c.get(f'/track/{did}')
+            if r.status_code!=200: raise RuntimeError(f'tracking page {r.status_code}')
             r=await c.get(f'/navigate/{did}')
             if r.status_code!=200: raise RuntimeError(f'navigation page {r.status_code}')
             r=await c.post(f'/deliveries/{did}/status',data={'status':'picked_up'})
@@ -78,7 +86,7 @@ async def _smoke():
             if r.status_code!=200: raise RuntimeError(f'orders/earnings page {r.status_code}')
             r=await c.post('/driver/online',data={'online':'0'})
             if r.status_code not in (303,307) or '/driver/app' not in r.headers.get('location',''): raise RuntimeError(f'go offline {r.status_code} {r.headers.get("location","")}')
-            print('DRIVER_SMOKE_OK guest_guard install_assets login dashboard_redirect app setup verification gps online offer accept active navigate pickup deliver earnings offline',flush=True)
+            print('DRIVER_SMOKE_OK guest_guard install_manifest png_icons login dashboard_redirect app setup verification gps online offer accept active live_tracking tracking_page navigate pickup deliver earnings offline',flush=True)
     except Exception as e:
         print(f'DRIVER_SMOKE_FAIL {type(e).__name__}: {e}',flush=True)
     finally:
