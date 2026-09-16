@@ -52,7 +52,7 @@ def onboarding_complete(request:Request):
     u=require_user(request)
     with db() as con:
         con.execute('INSERT INTO onboarding_progress(user_id,completed_at,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET completed_at=excluded.completed_at,updated_at=excluded.updated_at',(u['id'],now(),now()))
-    return RedirectResponse('/dashboard',303)
+    return RedirectResponse('/driver/app' if u['role']=='driver' else '/dashboard',303)
 
 for p,m in [('/dashboard','GET'),('/market','GET'),('/market/listings/{lid}','GET')]: _remove(p,m)
 
@@ -62,6 +62,7 @@ def friendly_dashboard(request:Request):
     with db() as con:
         if not _legal_ok(con,u): return RedirectResponse('/legal/acceptance',303)
         if not _verified(con,u): return RedirectResponse('/account/verification',303)
+        if u['role']=='driver': return RedirectResponse('/driver/app',303)
         staff=con.execute('SELECT staff_role FROM staff_access WHERE user_id=?',(u['id'],)).fetchone()
         if not staff and u['role']!='admin' and not _onboarded(con,u): return RedirectResponse('/onboarding',303)
         if staff:
@@ -70,8 +71,6 @@ def friendly_dashboard(request:Request):
             stats={'users':con.execute('SELECT COUNT(*) c FROM users').fetchone()['c'],'online':con.execute('SELECT COUNT(*) c FROM driver_profiles WHERE online=1').fetchone()['c'],'active':con.execute("SELECT COUNT(*) c FROM deliveries WHERE status IN ('posted','accepted','picked_up')").fetchone()['c'],'today':con.execute("SELECT COUNT(*) c FROM deliveries WHERE date(created_at)=date('now')").fetchone()['c'],'revenue':con.execute("SELECT COALESCE(SUM(platform_fee_cents),0) c FROM deliveries WHERE status='delivered'").fetchone()['c'],'disputes':con.execute("SELECT COUNT(*) c FROM disputes WHERE status='open'").fetchone()['c']}
             alerts={'accounts':con.execute("SELECT COUNT(*) c FROM users u LEFT JOIN account_verifications a ON a.user_id=u.id WHERE u.role IN ('customer','business') AND COALESCE(a.verification_status,'pending')!='verified'").fetchone()['c'],'drivers':con.execute("SELECT COUNT(*) c FROM users u LEFT JOIN driver_compliance c ON c.user_id=u.id WHERE u.role='driver' AND (COALESCE(c.identity_status,'pending')!='approved' OR COALESCE(c.background_status,'pending')!='approved' OR COALESCE(c.insurance_status,'pending')!='approved')").fetchone()['c'],'reports':con.execute("SELECT COUNT(*) c FROM marketplace_reports WHERE status='open'").fetchone()['c'],'payments':con.execute("SELECT COUNT(*) c FROM payment_records WHERE status IN ('failed','error')").fetchone()['c']}
             rows=con.execute('SELECT d.*,u.name customer,dr.name driver FROM deliveries d JOIN users u ON u.id=d.customer_id LEFT JOIN users dr ON dr.id=d.driver_id ORDER BY d.id DESC LIMIT 50').fetchall(); return page(request,'admin.html',stats=stats,alerts=alerts,deliveries=rows,friendly=friendly)
-        if u['role']=='driver':
-            prof=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone(); comp=con.execute('SELECT * FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone(); available=con.execute("SELECT d.*,c.name customer FROM deliveries d JOIN users c ON c.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC LIMIT 30").fetchall(); mine=con.execute("SELECT d.*,c.name customer FROM deliveries d JOIN users c ON c.id=d.customer_id WHERE d.driver_id=? AND d.status IN ('accepted','picked_up') ORDER BY d.id DESC",(u['id'],)).fetchall(); earnings=con.execute("SELECT COALESCE(SUM(amount_cents),0) c FROM ledger WHERE user_id=? AND kind IN ('driver_earning','shopping_reimbursement')",(u['id'],)).fetchone()['c']; return page(request,'driver.html',profile=prof,compliance=comp,available=available,mine=mine,earnings=earnings,friendly=friendly)
         deliveries=con.execute('SELECT d.*,dr.name driver FROM deliveries d LEFT JOIN users dr ON dr.id=d.driver_id WHERE d.customer_id=? OR d.business_id=? ORDER BY d.id DESC',(u['id'],u['id'])).fetchall(); return page(request,'customer.html',deliveries=deliveries,account_verified=True,friendly=friendly)
 
 @app.get('/orders',response_class=HTMLResponse)
