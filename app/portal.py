@@ -72,4 +72,4 @@ def portal_dashboard(request:Request):
 from . import main as _main_module
 from .database import db as _persistent_db
 _main_module.db=_persistent_db;db=_persistent_db
-from . import marketplace,production,payments,routing,legal,community_marketplace,marketplace_payments,admin_accounts,ux,community_plus,refunds,verification,storage_integration,infrastructure,job_board,security,driver_app,driver_smoke,mobile_api,tracking_live,driver_payouts
+from . import marketplace,production,payments,routing,legal,community_marketplace,marketplace_payments,admin_accounts,ux,community_plus,refunds,verification,storage_integration,infrastructure,job_board,security,driver_app,driver_smoke,mobile_api,tracking_live,driver_payouts,driver_telemetry
