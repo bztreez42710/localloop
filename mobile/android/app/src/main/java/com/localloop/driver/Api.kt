@@ -13,7 +13,6 @@ import java.time.Instant
 object Api {
     const val BASE = "https://localloop-app.onrender.com"
     class HttpError(val code:Int, message:String): RuntimeException(message)
-
     private fun prefs(ctx:Context)=ctx.getSharedPreferences("localloop",Context.MODE_PRIVATE)
     private fun token(ctx: Context): String = prefs(ctx).getString("token", "") ?: ""
     fun saveToken(ctx: Context, token: String) = prefs(ctx).edit().putString("token", token).apply()
@@ -44,7 +43,6 @@ object Api {
         val o=JSONObject().put("path",path).put("form",JSONObject(form)).put("queued_at",Instant.now().toString())
         a.put(o); while(a.length()>120)a.remove(0); prefs(ctx).edit().putString("offline_queue",a.toString()).apply()
     }
-
     fun flushQueue(ctx:Context):Int{
         val a=try{JSONArray(prefs(ctx).getString("offline_queue","[]"))}catch(_:Exception){JSONArray()}
         if(a.length()==0)return 0
@@ -54,11 +52,10 @@ object Api {
             f.keys().forEach{m[it]=f.optString(it)}
             try{request(ctx,"POST",o.getString("path"),m);sent++}
             catch(e:IOException){remain.put(o);for(j in i+1 until a.length())remain.put(a.getJSONObject(j));break}
-            catch(e:HttpError){ if(e.code>=500)remain.put(o) }
+            catch(e:HttpError){if(e.code>=500)remain.put(o)}
         }
         prefs(ctx).edit().putString("offline_queue",remain.toString()).apply(); return sent
     }
-
     private fun postQueueable(ctx:Context,path:String,form:Map<String,String>):JSONObject{
         return try{request(ctx,"POST",path,form)}catch(e:IOException){queue(ctx,path,form);JSONObject().put("queued",true)}
     }
@@ -66,7 +63,7 @@ object Api {
     fun login(ctx: Context, email: String, password: String): JSONObject = request(ctx,"POST","/api/mobile/login", mapOf("email" to email,"password" to password,"platform" to "android"), false)
     fun me(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/me")
     fun offers(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/offers")
-    fun smartDashboard(ctx:Context):JSONObject{ try{flushQueue(ctx)}catch(_:Exception){}; return request(ctx,"GET","/api/mobile/smart-dashboard") }
+    fun smartDashboard(ctx:Context):JSONObject{try{flushQueue(ctx)}catch(_:Exception){};return request(ctx,"GET","/api/mobile/smart-dashboard")}
     fun earnings(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/earnings")
     fun money(ctx:Context):JSONObject=request(ctx,"GET","/api/mobile/money")
     fun payout(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/payout")
@@ -77,6 +74,7 @@ object Api {
     fun status(ctx: Context, id: Int, status: String, proof: String = "", handoff: String = ""): JSONObject = postQueueable(ctx,"/api/mobile/deliveries/$id/status", mapOf("status" to status,"proof" to proof,"handoff_code" to handoff))
     fun acceptShopping(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/accept")
     fun shoppingStatus(ctx: Context, id: Int, status: String, actualGoodsCents: Int = 0): JSONObject = postQueueable(ctx,"/api/mobile/shopping/$id/status", mapOf("status" to status,"actual_goods_cents" to actualGoodsCents.toString()))
+    fun nextShoppingStop(ctx:Context,id:Int):JSONObject=request(ctx,"POST","/api/mobile/shopping/$id/next-stop")
     fun location(ctx: Context, lat: Double, lon: Double, speedMps: Double = 0.0, bearing: Double = 0.0, accuracyM: Double = 0.0): JSONObject {
         val form=mapOf("latitude" to lat.toString(),"longitude" to lon.toString(),"speed_mps" to speedMps.toString(),"bearing" to bearing.toString(),"accuracy_m" to accuracyM.toString(),"recorded_at" to Instant.now().toString())
         return postQueueable(ctx,"/api/mobile/location",form)
