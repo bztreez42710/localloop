@@ -90,7 +90,7 @@ class MainActivity : Activity() {
         root.addView(button("Stop background GPS") { stopGps() })
         root.addView(button("Earnings") { loadEarnings() })
         root.addView(button("Log out") { logout() })
-        root.addView(label("Offers and active deliveries"))
+        root.addView(label("Offers and active jobs"))
         refresh()
     }
 
@@ -120,15 +120,41 @@ class MainActivity : Activity() {
 
     private fun addJobCard(job: JSONObject, active: Boolean) {
         val id = job.getInt("id")
+        val type = job.optString("job_type", "delivery")
+        val isShopping = type == "shopping"
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(18,18,18,18); setBackgroundColor(Color.rgb(20,29,48))
         }
-        box.addView(label("Delivery #$id · $${"%.2f".format(job.optInt("driver_pay_cents")/100.0)} · ${job.optDouble("distance_miles")} mi"))
+        if (isShopping) {
+            box.addView(label("Shopping #$id · $${"%.2f".format(job.optInt("driver_pay_cents")/100.0)} shopper pay"))
+            box.addView(label("Merchandise budget: $${"%.2f".format(job.optInt("estimated_goods_cents")/100.0)}"))
+        } else {
+            box.addView(label("Delivery #$id · $${"%.2f".format(job.optInt("driver_pay_cents")/100.0)} · ${job.optDouble("distance_miles")} mi"))
+        }
         box.addView(label("${job.optString("pickup")} → ${job.optString("dropoff")}"))
         box.addView(label(job.optString("item_description")))
-        if (!active) box.addView(button("Accept delivery") { doAction { Api.accept(this,id) } })
-        else if (job.optString("status") == "accepted") box.addView(button("Mark picked up") { doAction { Api.status(this,id,"picked_up") } })
-        else {
+
+        if (!active) {
+            box.addView(button(if(isShopping) "Accept shopping job" else "Accept delivery") {
+                doAction { if(isShopping) Api.acceptShopping(this,id) else Api.accept(this,id) }
+            })
+        } else if (isShopping) {
+            when (job.optString("status")) {
+                "accepted" -> box.addView(button("Start shopping") { doAction { Api.shoppingStatus(this,id,"shopping") } })
+                "shopping" -> {
+                    val total = input("Actual merchandise total, e.g. 8.75")
+                    box.addView(total)
+                    box.addView(button("Finish shopping / start delivery") {
+                        val cents = ((total.text.toString().toDoubleOrNull() ?: -1.0) * 100.0).toInt()
+                        if (cents < 0) status.text = "Enter the receipt total first"
+                        else doAction { Api.shoppingStatus(this,id,"delivering",cents) }
+                    })
+                }
+                "delivering" -> box.addView(button("Complete shopping delivery") { doAction { Api.shoppingStatus(this,id,"delivered") } })
+            }
+        } else if (job.optString("status") == "accepted") {
+            box.addView(button("Mark picked up") { doAction { Api.status(this,id,"picked_up") } })
+        } else {
             val proof = input("Delivery note / proof")
             val handoff = input("Customer handoff code if required")
             box.addView(proof); box.addView(handoff)
@@ -153,7 +179,7 @@ class MainActivity : Activity() {
             requestNeededPermissions(); status.text="Allow location, then tap Start background GPS again"; return
         }
         startForegroundService(Intent(this, LocationService::class.java))
-        status.text = "Background GPS started for active delivery"
+        status.text = "Background GPS started for active job"
     }
 
     private fun stopGps() {
@@ -168,7 +194,11 @@ class MainActivity : Activity() {
                 val e=Api.earnings(this)
                 val h=e.optJSONArray("history") ?: JSONArray()
                 val b=StringBuilder("Balance: $${"%.2f".format(e.optInt("payout_balance_cents")/100.0)}\nCompleted: ${e.optInt("completed")}\n\n")
-                for(i in 0 until minOf(h.length(),20)) { val r=h.getJSONObject(i); b.append("Delivery #${r.optInt("delivery_id")}: $${"%.2f".format(r.optInt("amount_cents")/100.0)}\n") }
+                for(i in 0 until minOf(h.length(),20)) {
+                    val r=h.getJSONObject(i)
+                    val name=if(r.isNull("delivery_id") || r.optInt("delivery_id") == 0) r.optString("note","Shopping earning") else "Delivery #${r.optInt("delivery_id")}"
+                    b.append("$name: $${"%.2f".format(r.optInt("amount_cents")/100.0)}\n")
+                }
                 runOnUiThread { status.text=b.toString() }
             } catch(e:Exception) { runOnUiThread { status.text=e.message ?: "Could not load earnings" } }
         }
