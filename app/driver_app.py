@@ -48,9 +48,10 @@ def driver_app(request:Request):
         con.execute('INSERT OR IGNORE INTO driver_profiles(user_id) VALUES(?)',(u['id'],))
         profile=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         available=con.execute("SELECT d.*,u.name customer FROM deliveries d JOIN users u ON u.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC LIMIT 40").fetchall()
+        shopping_available=con.execute("SELECT o.*,c.name customer,(SELECT COUNT(*) FROM shopping_stops s WHERE s.order_id=o.id) stop_count FROM shopping_orders o JOIN users c ON c.id=o.customer_id WHERE o.status='posted' AND o.payment_status='funded' ORDER BY o.id DESC LIMIT 40").fetchall()
         mine=con.execute("SELECT * FROM deliveries WHERE driver_id=? AND status IN ('accepted','picked_up') ORDER BY id DESC",(u['id'],)).fetchall()
         compliance=con.execute('SELECT * FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
-    return page(request,'driver_app.html',profile=profile,available=available,mine=mine,compliance=compliance,friendly=friendly,notice=request.query_params.get('notice',''))
+    return page(request,'driver_app.html',profile=profile,available=available,shopping_available=shopping_available,mine=mine,compliance=compliance,friendly=friendly,notice=request.query_params.get('notice',''))
 
 @app.get('/driver/offers.json')
 def driver_offers(request:Request):
@@ -60,7 +61,10 @@ def driver_offers(request:Request):
         p=con.execute('SELECT online FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         if not p or not p['online']: return JSONResponse({'online':False,'offers':[]},headers={'Cache-Control':'no-store'})
         rows=con.execute("SELECT id,driver_pay_cents,distance_miles,pickup,dropoff,item_description,updated_at FROM deliveries WHERE status='posted' ORDER BY id DESC LIMIT 40").fetchall()
-    return JSONResponse({'online':True,'offers':[dict(x) for x in rows]},headers={'Cache-Control':'no-store'})
+        shopping=con.execute("SELECT o.id,o.driver_pay_cents,o.dropoff,o.updated_at,(SELECT COUNT(*) FROM shopping_stops s WHERE s.order_id=o.id) stop_count FROM shopping_orders o WHERE o.status='posted' AND o.payment_status='funded' ORDER BY o.id DESC LIMIT 40").fetchall()
+        offers=[{'key':'delivery:'+str(x['id']),'type':'delivery',**dict(x)} for x in rows]
+        offers += [{'key':'shopping:'+str(x['id']),'type':'shopping','id':x['id'],'driver_pay_cents':x['driver_pay_cents'],'distance_miles':0,'pickup':f"{x['stop_count']} shopping stop"+('s' if x['stop_count']!=1 else ''),'dropoff':x['dropoff'],'item_description':'Personal shopping request','updated_at':x['updated_at']} for x in shopping]
+    return JSONResponse({'online':True,'offers':offers},headers={'Cache-Control':'no-store'})
 
 @app.post('/deliveries/{did}/accept')
 def driver_accept_delivery(did:int,request:Request):
@@ -107,7 +111,7 @@ def driver_icon_512():return Response(_icon_png(512),media_type='image/png',head
 def driver_manifest():return JSONResponse({'id':'/driver/app','name':'LocalLoop Driver','short_name':'LocalLoop Driver','description':'Accept LocalLoop deliveries, navigate, track jobs and earnings.','start_url':'/driver/app','scope':'/driver/','display':'standalone','orientation':'portrait','background_color':'#07111f','theme_color':'#6d5dfc','categories':['business','navigation','productivity'],'icons':[{'src':'/driver/icon-192.png','sizes':'192x192','type':'image/png','purpose':'any maskable'},{'src':'/driver/icon-512.png','sizes':'512x512','type':'image/png','purpose':'any maskable'}]},media_type='application/manifest+json')
 @app.get('/driver/sw.js')
 def driver_service_worker():
-    js="""const C='localloop-driver-v8';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim())));self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(ws=>ws.length?(ws[0].focus(),ws[0].navigate('/driver/app#offers')):clients.openWindow('/driver/app#offers')))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET'||new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
+    js="""const C='localloop-driver-v9';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim())));self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(ws=>ws.length?(ws[0].focus(),ws[0].navigate('/driver/app#offers')):clients.openWindow('/driver/app#offers')))});self.addEventListener('fetch',e=>{if(e.request.method!=='GET'||new URL(e.request.url).origin!==location.origin)return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})"""
     return Response(js,media_type='application/javascript',headers={'Service-Worker-Allowed':'/driver/','Cache-Control':'no-store'})
 
 @app.head('/')
