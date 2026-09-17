@@ -47,9 +47,6 @@ def _create_checkout(request:Request,amount:int,name:str,kind:str,oid:int):
     return stripe('POST','/checkout/sessions',data=data)
 
 def _session_paid(session:dict):
-    # Stripe can mark a Checkout Session complete before an asynchronous
-    # payment method has actually settled. LocalLoop only releases an order
-    # when Stripe explicitly reports payment_status=paid.
     return (session.get('payment_status') or '').lower()=='paid'
 
 def _mark_shopping_paid(con,oid:int,session_id:str):
@@ -67,8 +64,6 @@ def _mark_marketplace_paid(con,oid:int,session_id:str):
         return
     cur=con.execute('UPDATE marketplace_listings SET quantity=quantity-?,active=CASE WHEN quantity-?<=0 THEN 0 ELSE active END,updated_at=? WHERE id=? AND quantity>=?',(order['quantity'],order['quantity'],now(),order['listing_id'],order['quantity']))
     if cur.rowcount!=1:
-        # Money may already be captured. Do not silently mark the order paid
-        # without inventory; leave it for owner/refund review.
         con.execute("UPDATE marketplace_orders SET payment_provider_ref=?,payment_status='review_required',updated_at=? WHERE id=?",(session_id,now(),oid))
         con.execute("UPDATE payment_records SET status='review_required' WHERE provider_ref=?",(session_id,))
         return
@@ -97,6 +92,7 @@ def localpay_shop(oid:int,request:Request):
         amount=o['estimated_goods_cents']+o['driver_pay_cents']+o['platform_fee_cents']
     return page(request,'payment_portal.html',order=o,amount_cents=amount,processor_ready=configured())
 
+@app.get('/pay/shop/{oid}/stripe/start')
 @app.post('/pay/shop/{oid}/stripe/start')
 def stripe_shop_start(oid:int,request:Request):
     u=require_user(request)
