@@ -5,257 +5,81 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
+import android.util.Base64
 import android.view.Gravity
-import android.view.View
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
-    private lateinit var root: LinearLayout
-    private lateinit var status: TextView
-    private lateinit var jobsContainer: LinearLayout
-    private val bg = Color.rgb(7,17,31)
-    private val card = Color.rgb(20,29,48)
-    private val lime = Color.rgb(199,255,74)
-    private val muted = Color.rgb(166,178,197)
+    private lateinit var root:LinearLayout
+    private lateinit var status:TextView
+    private lateinit var cockpit:LinearLayout
+    private lateinit var offersBox:LinearLayout
+    private val bg=Color.rgb(7,17,31); private val card=Color.rgb(20,29,48); private val lime=Color.rgb(199,255,74); private val muted=Color.rgb(166,178,197); private val red=Color.rgb(210,70,70)
+    private var proofPhoto=""; private var receiptPhoto=""; private var substitutionPhoto=""; private var captureMode=""
+    private var currentJob:JSONObject?=null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        requestNeededPermissions()
-        showEntry()
-    }
+    override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);requestNeededPermissions();showEntry()}
+    private fun requestNeededPermissions(){val p=mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION);if(android.os.Build.VERSION.SDK_INT>=33)p+=Manifest.permission.POST_NOTIFICATIONS;if(p.any{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED})requestPermissions(p.toTypedArray(),7)}
+    private fun rounded(c:Int,r:Float=22f,s:Int?=null)=GradientDrawable().apply{setColor(c);cornerRadius=r;if(s!=null)setStroke(1,s)}
+    private fun label(t:String,size:Float=16f,color:Int=Color.rgb(225,230,238))=TextView(this).apply{text=t;textSize=size;setTextColor(color);setPadding(0,6,0,6)}
+    private fun eyebrow(t:String)=label(t.uppercase(),11f,lime).apply{letterSpacing=.12f;setTypeface(typeface,Typeface.BOLD)}
+    private fun title(t:String)=label(t,30f,Color.WHITE).apply{setTypeface(typeface,Typeface.BOLD)}
+    private fun cardBox()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(22,20,22,20);background=rounded(card,22f,Color.rgb(44,58,80));layoutParams=LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,8,0,8)}}
+    private fun button(t:String,primary:Boolean=false,danger:Boolean=false,click:()->Unit)=Button(this).apply{text=t;isAllCaps=false;textSize=15f;setTypeface(typeface,Typeface.BOLD);setTextColor(if(primary)Color.rgb(5,12,20) else Color.WHITE);background=rounded(if(danger)red else if(primary)lime else Color.rgb(31,45,67),18f,if(primary||danger)null else Color.rgb(61,79,108));minHeight=54;setOnClickListener{click()};layoutParams=LinearLayout.LayoutParams(-1,-2).apply{setMargins(0,5,0,5)}}
+    private fun input(h:String,password:Boolean=false)=EditText(this).apply{hint=h;setTextColor(Color.WHITE);setHintTextColor(Color.rgb(120,134,156));background=rounded(Color.rgb(10,20,35),16f,Color.rgb(52,67,91));setPadding(18,12,18,12);if(password)inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD}
+    private fun makeRoot(){val s=ScrollView(this).apply{isFillViewport=true;setBackgroundColor(bg)};root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(28,42,28,76);setBackgroundColor(bg)};s.addView(root);setContentView(s)}
 
-    private fun requestNeededPermissions() {
-        val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (android.os.Build.VERSION.SDK_INT >= 33) perms += Manifest.permission.POST_NOTIFICATIONS
-        if (perms.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestPermissions(perms.toTypedArray(), 7)
-    }
+    private fun showEntry(){makeRoot();root.addView(eyebrow("LocalLoop"));root.addView(title("Driver"));val tok=getSharedPreferences("localloop",MODE_PRIVATE).getString("token","")?:"";if(tok.isBlank())showLogin() else showDashboard()}
+    private fun showLogin(){root.addView(label("Sign in to work, navigate, track mileage, message customers, and cash out.",15f,muted));val b=cardBox();val e=input("Email");val p=input("Password",true);status=label("");b.addView(e);b.addView(p);b.addView(button("Sign in",true){status.text="Signing in…";thread{try{val r=Api.login(this,e.text.toString(),p.text.toString());Api.saveToken(this,r.getString("token"));runOnUiThread{showEntry()}}catch(x:Exception){runOnUiThread{status.text=x.message?:"Login failed"}}}});b.addView(status);root.addView(b)}
 
-    private fun rounded(color: Int, radius: Float = 24f, stroke: Int? = null): GradientDrawable = GradientDrawable().apply {
-        setColor(color); cornerRadius = radius
-        if (stroke != null) setStroke(1, stroke)
-    }
+    private fun showDashboard(){root.removeAllViews();root.addView(eyebrow("LocalLoop"));root.addView(title("Driver cockpit"));root.addView(label("Your active job stays front and center. GPS, money, safety, and offers stay one tap away.",14f,muted));
+        val s=cardBox();status=label("Loading…",17f);s.addView(status);val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER};val on=button("Go online",true){setOnline(true)};val off=button("Go offline"){setOnline(false)};on.layoutParams=LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(0,4,5,4)};off.layoutParams=LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(5,4,0,4)};row.addView(on);row.addView(off);s.addView(row);s.addView(button("Money, expenses & payouts"){openMoney()});s.addView(button("Refresh"){refresh()});root.addView(s)
+        cockpit=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};root.addView(cockpit);root.addView(eyebrow("Available offers"));offersBox=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};root.addView(offersBox);root.addView(button("Log out"){logout()});refresh()}
 
-    private fun makeRoot(): LinearLayout {
-        val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(bg) }
-        root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(28, 42, 28, 72)
-            setBackgroundColor(bg)
-        }
-        scroll.addView(root)
-        setContentView(scroll)
-        return root
-    }
+    private fun refresh(){status.text="Refreshing…";thread{try{val d=Api.smartDashboard(this);runOnUiThread{renderDashboard(d)}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not refresh"}}}}
+    private fun renderDashboard(d:JSONObject){val dr=d.optJSONObject("driver")?:JSONObject();val m=d.optJSONObject("money")?:JSONObject();val online=dr.optBoolean("online");val p=getSharedPreferences("localloop",MODE_PRIVATE);val last=p.getLong("last_gps_epoch",0L);val age=System.currentTimeMillis()-last;val gps=if(last==0L)"GPS waiting" else if(age<15000)"GPS live" else "GPS stale";status.text="${dr.optString("name")}\n${if(online)"● ONLINE" else "○ OFFLINE"} · $gps · Available $${"%.2f".format(m.optInt("available_cents")/100.0)}";currentJob=d.optJSONObject("current_job");renderCockpit(currentJob);renderOffers(d.optJSONArray("offers")?:JSONArray());if(online&&currentJob!=null)startGps()}
 
-    private fun title(text: String) = TextView(this).apply {
-        this.text = text; textSize = 30f; setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD); setPadding(0,10,0,4)
-    }
-    private fun eyebrow(text: String) = TextView(this).apply {
-        this.text = text.uppercase(); textSize = 11f; letterSpacing = .12f; setTextColor(lime); setTypeface(typeface, Typeface.BOLD); setPadding(0,0,0,6)
-    }
-    private fun label(text: String, size: Float = 16f, color: Int = Color.rgb(220,225,235)) = TextView(this).apply {
-        this.text = text; textSize = size; setTextColor(color); setPadding(0,6,0,6)
-    }
-    private fun cardBox(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(22,20,22,20)
-        background = rounded(card, 22f, Color.rgb(42,56,78))
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(0,10,0,10) }
-    }
-    private fun button(text: String, primary: Boolean = false, onClick: () -> Unit) = Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        textSize = 15f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(if (primary) Color.rgb(5,12,20) else Color.WHITE)
-        background = rounded(if (primary) lime else Color.rgb(31,45,67), 18f, if(primary) null else Color.rgb(61,79,108))
-        setPadding(18,12,18,12)
-        minHeight = 54
-        setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(0,5,0,5) }
-    }
-    private fun input(hint: String, password: Boolean=false) = EditText(this).apply {
-        this.hint = hint; setTextColor(Color.WHITE); setHintTextColor(Color.rgb(120,134,156)); setSingleLine(true)
-        background = rounded(Color.rgb(10,20,35), 16f, Color.rgb(52,67,91)); setPadding(18,12,18,12)
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(0,6,0,6) }
-        if(password) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-    }
+    private fun renderCockpit(j:JSONObject?){cockpit.removeAllViews();if(j==null){val b=cardBox();b.addView(eyebrow("Current job"));b.addView(label("No active job. Go online and choose an offer below.",16f,muted));cockpit.addView(b);return};val b=cardBox();val kind=j.optString("kind");val id=j.optInt("id");b.addView(eyebrow("Current ${if(kind=="shopping")"shopping" else "delivery"} #$id"));b.addView(label(j.optString("stage"),24f,Color.WHITE));b.addView(label(j.optString("next_label"),15f,lime));b.addView(label(j.optString("next_address"),15f));val eta=j.optInt("eta_minutes",-1);if(eta>0)b.addView(label("About $eta min · ${j.optDouble("distance_to_next_miles",0.0)} mi to next stop",15f,muted));b.addView(label("Expected earnings: $${"%.2f".format(j.optInt("expected_earnings_cents")/100.0)} · Trip ${j.optDouble("trip_miles",0.0)} mi",15f,muted));if(j.optString("notes").isNotBlank())b.addView(label("Customer notes: ${j.optString("notes")}",14f,muted));if(j.optBoolean("arrived"))b.addView(label("✓ You’ve arrived nearby",17f,lime));if(j.optBoolean("gps_stale"))b.addView(label("⚠ GPS signal is stale. Check location permission and signal.",15f,Color.rgb(255,200,90)));if(j.optBoolean("route_deviation"))b.addView(label("⚠ You appear well off the expected route.",15f,Color.rgb(255,200,90)));
+        b.addView(button("Navigate to ${j.optString("next_label")}",true){navigateTo(j.optString("next_address"))});addMessageButtons(b);b.addView(button("SOS / report safety incident",danger=true){openIncident()});
+        if(kind=="shopping")b.addView(button("Route order: optimized / original"){chooseRoute(id)});b.addView(button("Take delivery proof photo"){captureMode="proof";openCamera()});if(kind=="shopping")b.addView(button("Take receipt photo"){captureMode="receipt";openCamera()});
+        when{kind=="delivery"&&j.optString("status")=="accepted"->b.addView(button("Mark picked up",true){runAction{Api.status(this,id,"picked_up")}});kind=="delivery"&&j.optString("status")=="picked_up"->b.addView(button("Complete delivery",true){completeDelivery(id,false)});kind=="shopping"&&j.optString("status")=="accepted"->b.addView(button("Start shopping",true){runAction{Api.shoppingStatus(this,id,"shopping")}});kind=="shopping"&&j.optString("status")=="shopping"->{b.addView(button("Offer substitution"){openSubstitution()});b.addView(button("Finish shopping / start delivery",true){openReceiptTotal(id)})};kind=="shopping"&&j.optString("status")=="delivering"->b.addView(button("Complete shopping delivery",true){completeDelivery(id,true)}};cockpit.addView(b)}
 
-    private fun showEntry() {
-        makeRoot()
-        root.addView(eyebrow("LocalLoop"))
-        root.addView(title("Driver"))
-        val token = getSharedPreferences("localloop", MODE_PRIVATE).getString("token", "") ?: ""
-        if (token.isBlank()) showLogin() else showDashboard()
-    }
+    private fun addMessageButtons(b:LinearLayout){val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};listOf("At store" to "at_store","Unavailable" to "unavailable","Outside" to "outside").forEach{(t,k)->val x=button(t){sendPreset(k)};x.layoutParams=LinearLayout.LayoutParams(0,-2,1f).apply{setMargins(2,4,2,4)};row.addView(x)};b.addView(row);b.addView(button("Message customer"){openCustomMessage()})}
+    private fun sendPreset(k:String)=runAction{Api.message(this,k)}
+    private fun openCustomMessage(){val i=input("Message");AlertDialog.Builder(this).setTitle("Message customer").setView(i).setNegativeButton("Cancel",null).setPositiveButton("Send"){_,_->runAction{Api.message(this,"message",i.text.toString())}}.show()}
+    private fun openIncident(){val i=input("What happened? (optional)");AlertDialog.Builder(this).setTitle("Safety / incident").setMessage("This records a timestamped safety incident with your current active-job location for LocalLoop review.").setView(i).setNegativeButton("Cancel",null).setPositiveButton("Send SOS"){_,_->val p=getSharedPreferences("localloop",MODE_PRIVATE);runAction{Api.incident(this,"sos",i.text.toString(),p.getString("last_lat","0")!!.toDoubleOrNull()?:0.0,p.getString("last_lon","0")!!.toDoubleOrNull()?:0.0)}}.show()}
+    private fun chooseRoute(id:Int){AlertDialog.Builder(this).setTitle("Shopping route order").setItems(arrayOf("Use LocalLoop optimized order","Use customer’s original store order")){_,which->runAction{Api.routePlan(this,id,which==0)}}.show()}
 
-    private fun showLogin() {
-        root.addView(label("Sign in to accept local jobs, navigate, track earnings, and cash out.", 16f, muted))
-        val box=cardBox(); val email=input("Email"); val pass=input("Password", true); status=label("")
-        box.addView(email); box.addView(pass); box.addView(button("Sign in", true) {
-            status.text = "Signing in…"
-            thread {
-                try {
-                    val result = Api.login(this, email.text.toString(), pass.text.toString())
-                    Api.saveToken(this, result.getString("token"))
-                    runOnUiThread { showEntry() }
-                } catch (e: Exception) { runOnUiThread { status.text = e.message ?: "Login failed" } }
-            }
-        }); box.addView(status); root.addView(box)
-    }
+    private fun renderOffers(a:JSONArray){offersBox.removeAllViews();if(a.length()==0){offersBox.addView(label("No offers right now.",14f,muted));return};for(i in 0 until a.length()){val j=a.getJSONObject(i);val b=cardBox();val shop=j.optString("job_type")=="shopping";val id=j.optInt("id");b.addView(eyebrow(if(shop)"Shopping #$id" else "Delivery #$id"));b.addView(label("$${"%.2f".format(j.optInt("driver_pay_cents")/100.0)}",24f,Color.WHITE));val ppm=if(j.isNull("pay_per_mile"))"" else " · $${"%.2f".format(j.optDouble("pay_per_mile"))}/mi";b.addView(label("${j.optInt("stop_count",1)} stop(s) · ~${j.optInt("estimated_minutes",0)} min$ppm",14f,muted));b.addView(label(j.optString("complexity"),14f,muted));b.addView(label("${j.optString("pickup")} → ${j.optString("dropoff")}",14f));b.addView(button(if(shop)"Accept shopping job" else "Accept delivery",true){runAction(true){if(shop)Api.acceptShopping(this,id) else Api.accept(this,id)}});offersBox.addView(b)}}
 
-    private fun showDashboard() {
-        root.removeAllViews()
-        root.addView(eyebrow("LocalLoop")); root.addView(title("Driver dashboard"))
-        root.addView(label("One place for jobs, navigation, GPS, earnings, and payouts.", 15f, muted))
+    private fun navigateTo(address:String){if(address.isBlank())return;val g=Intent(Intent.ACTION_VIEW,Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")).apply{setPackage("com.google.android.apps.maps")};try{startActivity(g)}catch(_:Exception){startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(address)}&travelmode=driving&dir_action=navigate")))}}
+    private fun setOnline(on:Boolean){runAction{Api.online(this,on)};if(!on)stopGps()}
+    private fun startGps(){if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestNeededPermissions();return};startForegroundService(Intent(this,LocationService::class.java))}
+    private fun stopGps(){stopService(Intent(this,LocationService::class.java))}
+    private fun runAction(startGps:Boolean=false,call:()->JSONObject){status.text="Working…";thread{try{val r=call();runOnUiThread{if(startGps)startGps();status.text=if(r.optBoolean("queued"))"Saved offline — will sync automatically" else "Done";refresh()}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Action failed"}}}}
 
-        val summary=cardBox(); status=label("Loading account…",17f); summary.addView(status)
-        val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER }
-        val online=button("Go online", true) { setOnline(true) }; val offline=button("Go offline") { setOnline(false) }
-        online.layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f).apply{setMargins(0,4,5,4)}
-        offline.layoutParams=LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f).apply{setMargins(5,4,0,4)}
-        row.addView(online); row.addView(offline); summary.addView(row)
-        summary.addView(button("Refresh dashboard") { refresh() }); root.addView(summary)
+    private fun openReceiptTotal(id:Int){val i=input("Receipt total, e.g. 23.45");AlertDialog.Builder(this).setTitle("Finish shopping").setMessage(if(receiptPhoto.isBlank())"Tip: take a receipt photo first for the proof package." else "Receipt photo attached.").setView(i).setNegativeButton("Cancel",null).setPositiveButton("Start delivery"){_,_->val c=((i.text.toString().toDoubleOrNull()?:-1.0)*100).toInt();if(c<0)status.text="Enter the receipt total" else runAction{if(receiptPhoto.isNotBlank())Api.proof(this,receiptPhoto=receiptPhoto);Api.shoppingStatus(this,id,"delivering",c)}}.show()}
+    private fun completeDelivery(id:Int,shopping:Boolean){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(20,0,20,0)};val note=input("Delivery note");val pin=input("Customer PIN (optional)");val sig=input("Customer signature/name (optional)");box.addView(note);box.addView(pin);box.addView(sig);AlertDialog.Builder(this).setTitle("Complete ${if(shopping)"shopping delivery" else "delivery"}").setMessage(if(proofPhoto.isBlank())"No proof photo is attached yet. You can still complete, but a photo is recommended." else "Proof photo attached.").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Complete"){_,_->runAction{Api.proof(this,note.text.toString(),proofPhoto,receiptPhoto,sig.text.toString(),pin.text.toString());if(shopping)Api.shoppingStatus(this,id,"delivered") else Api.status(this,id,"delivered",note.text.toString(),pin.text.toString())}}.show()}
+    private fun openSubstitution(){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(20,0,20,0)};val a=input("Unavailable item");val b=input("Replacement option");box.addView(a);box.addView(b);AlertDialog.Builder(this).setTitle("Offer substitution").setMessage(if(substitutionPhoto.isBlank())"You can take a substitution photo first, or send without one." else "Substitution photo attached.").setView(box).setNeutralButton("Take photo"){_,_->captureMode="substitution";openCamera()}.setNegativeButton("Cancel",null).setPositiveButton("Send"){_,_->runAction{Api.substitution(this,a.text.toString(),b.text.toString(),substitutionPhoto)}}.show()}
+    private fun openCamera(){try{startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE),91)}catch(_:Exception){status.text="Camera app unavailable"}}
+    override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==91&&resultCode==RESULT_OK){val bmp=data?.extras?.get("data") as? Bitmap?:return;val out=ByteArrayOutputStream();bmp.compress(Bitmap.CompressFormat.JPEG,78,out);val encoded="data:image/jpeg;base64,"+Base64.encodeToString(out.toByteArray(),Base64.NO_WRAP);when(captureMode){"proof"->proofPhoto=encoded;"receipt"->receiptPhoto=encoded;"substitution"->substitutionPhoto=encoded};status.text="Photo attached"}}
 
-        val gps=cardBox(); gps.addView(eyebrow("Live location")); gps.addView(label("GPS shares only while you are online with an active job. LocalLoop records route movement, GPS accuracy, and device-reported speed for active-job operations.",14f,muted))
-        gps.addView(button("Start live GPS", true) { startGps() }); gps.addView(button("Stop live GPS") { stopGps() }); root.addView(gps)
-
-        val money=cardBox(); money.addView(eyebrow("Money")); money.addView(button("Earnings") { loadEarnings() }); money.addView(button("Payouts & cash out", true) { loadPayouts() }); root.addView(money)
-
-        root.addView(eyebrow("Jobs")); jobsContainer=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}; root.addView(jobsContainer)
-        root.addView(button("Log out") { logout() })
-        refresh()
-    }
-
-    private fun refresh() {
-        status.text = "Refreshing…"
-        thread {
-            try {
-                val me = Api.me(this); val jobs = Api.offers(this)
-                runOnUiThread {
-                    val prefs=getSharedPreferences("localloop",MODE_PRIVATE)
-                    val mph=prefs.getFloat("last_speed_mph",-1f)
-                    val gpsText=if(mph>=0f) " · GPS ${"%.0f".format(mph)} mph" else ""
-                    status.text = "${me.optString("name")}\n${if(me.optBoolean("online")) "● ONLINE" else "○ OFFLINE"} · Available $${"%.2f".format(me.optInt("payout_balance_cents")/100.0)}$gpsText"
-                    renderJobs(jobs)
-                }
-            } catch (e: Exception) { runOnUiThread { status.text = e.message ?: "Could not refresh" } }
-        }
-    }
-
-    private fun renderJobs(data: JSONObject) {
-        jobsContainer.removeAllViews()
-        val active = data.optJSONArray("active") ?: JSONArray(); val offers = data.optJSONArray("offers") ?: JSONArray()
-        jobsContainer.addView(label("Active jobs · ${active.length()}",20f,Color.WHITE))
-        if(active.length()==0) jobsContainer.addView(label("No active jobs yet. Go online to see offers.",14f,muted))
-        for (i in 0 until active.length()) addJobCard(active.getJSONObject(i), true)
-        jobsContainer.addView(label("Available offers · ${offers.length()}",20f,Color.WHITE))
-        if(offers.length()==0) jobsContainer.addView(label("No offers available right now.",14f,muted))
-        for (i in 0 until offers.length()) addJobCard(offers.getJSONObject(i), false)
-    }
-
-    private fun navigateTo(address: String, label: String) {
-        if (address.isBlank()) { status.text = "No address is available for $label"; return }
-        val navUri = Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")
-        val mapsIntent = Intent(Intent.ACTION_VIEW, navUri).apply { setPackage("com.google.android.apps.maps") }
-        try { startActivity(mapsIntent) }
-        catch (_: Exception) {
-            val web = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(address)}&travelmode=driving&dir_action=navigate")
-            startActivity(Intent(Intent.ACTION_VIEW, web))
-        }
-    }
-
-    private fun addJobCard(job: JSONObject, active: Boolean) {
-        val id=job.getInt("id"); val isShopping=job.optString("job_type","delivery")=="shopping"; val pickup=job.optString("pickup"); val dropoff=job.optString("dropoff")
-        val box=cardBox()
-        box.addView(eyebrow(if(isShopping) "Shopping #$id" else "Delivery #$id"))
-        val pay=job.optInt("driver_pay_cents")/100.0
-        box.addView(label("$${"%.2f".format(pay)} ${if(isShopping) "shopper pay" else "driver pay"}",22f,Color.WHITE))
-        if(isShopping) box.addView(label("Merchandise budget $${"%.2f".format(job.optInt("estimated_goods_cents")/100.0)}",14f,muted))
-        else box.addView(label("${job.optDouble("distance_miles")} miles",14f,muted))
-        box.addView(label("Pickup\n$pickup",15f)); box.addView(label("Drop-off\n$dropoff",15f)); box.addView(label(job.optString("item_description"),14f,muted))
-
-        if (!active) {
-            box.addView(button(if(isShopping) "Accept shopping job" else "Accept delivery", true) {
-                doAction(startGpsAfter=true) { if(isShopping) Api.acceptShopping(this,id) else Api.accept(this,id) }
-            })
-        } else if (isShopping) {
-            when(job.optString("status")) {
-                "accepted" -> { box.addView(button("Navigate to store",true){navigateTo(pickup,"store")}); box.addView(button("Start shopping"){doAction{Api.shoppingStatus(this,id,"shopping")}}) }
-                "shopping" -> {
-                    box.addView(button("Navigate to store",true){navigateTo(pickup,"store")}); val total=input("Receipt total, e.g. 8.75"); box.addView(total)
-                    box.addView(button("Finish shopping / start delivery",true){ val cents=((total.text.toString().toDoubleOrNull()?:-1.0)*100).toInt(); if(cents<0) status.text="Enter the receipt total first" else doAction{Api.shoppingStatus(this,id,"delivering",cents)} })
-                }
-                "delivering" -> { box.addView(button("Navigate to customer",true){navigateTo(dropoff,"customer")}); box.addView(button("Complete shopping delivery"){doAction{Api.shoppingStatus(this,id,"delivered")}}) }
-            }
-        } else if(job.optString("status")=="accepted") {
-            box.addView(button("Navigate to pickup",true){navigateTo(pickup,"pickup")}); box.addView(button("Mark picked up"){doAction{Api.status(this,id,"picked_up")}})
-        } else {
-            box.addView(button("Navigate to customer",true){navigateTo(dropoff,"customer")}); val proof=input("Delivery note / proof"); val handoff=input("Customer handoff code if required"); box.addView(proof); box.addView(handoff)
-            box.addView(button("Complete delivery",true){doAction{Api.status(this,id,"delivered",proof.text.toString(),handoff.text.toString())}})
-        }
-        jobsContainer.addView(box)
-    }
-
-    private fun doAction(startGpsAfter:Boolean=false, call: () -> JSONObject) {
-        status.text="Working…"
-        thread { try { call(); runOnUiThread { if(startGpsAfter) startGps(); refresh() } } catch(e:Exception) { runOnUiThread { status.text=e.message ?: "Action failed" } } }
-    }
-
-    private fun setOnline(on:Boolean) { doAction { Api.online(this,on) }; if(!on) stopGps() }
-
-    private fun startGps() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) { requestNeededPermissions(); status.text="Allow precise location, then tap Start live GPS again"; return }
-        startForegroundService(Intent(this, LocationService::class.java)); status.text="Live GPS started for active job"
-    }
-    private fun stopGps() { stopService(Intent(this, LocationService::class.java)); status.text="Live GPS stopped" }
-
-    private fun loadEarnings() {
-        status.text="Loading earnings…"
-        thread {
-            try {
-                val e=Api.earnings(this); val h=e.optJSONArray("history")?:JSONArray(); val b=StringBuilder("Available: $${"%.2f".format(e.optInt("payout_balance_cents")/100.0)}\nCompleted jobs: ${e.optInt("completed")}\n\nRecent earnings\n")
-                for(i in 0 until minOf(h.length(),12)){ val r=h.getJSONObject(i); val name=if(r.isNull("delivery_id")||r.optInt("delivery_id")==0) r.optString("note","Shopping earning") else "Delivery #${r.optInt("delivery_id")}"; b.append("$name  +$${"%.2f".format(r.optInt("amount_cents")/100.0)}\n") }
-                runOnUiThread { AlertDialog.Builder(this).setTitle("Earnings").setMessage(b.toString()).setPositiveButton("OK",null).show() }
-            } catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not load earnings"}}
-        }
-    }
-
-    private fun loadPayouts() {
-        status.text="Checking payout account…"
-        thread {
-            try {
-                val p=Api.payout(this); runOnUiThread {
-                    val available=p.optInt("available_cents")
-                    if(!p.optBoolean("connected") || !p.optBoolean("details_submitted") || !p.optBoolean("transfers_active")) {
-                        AlertDialog.Builder(this).setTitle("Set up driver payouts").setMessage("Connect a Stripe Express payout account so LocalLoop can send your available earnings to you securely.").setNegativeButton("Not now",null).setPositiveButton("Set up") { _,_-> startPayoutOnboarding() }.show()
-                    } else {
-                        AlertDialog.Builder(this).setTitle("Cash out").setMessage("Available earnings: $${"%.2f".format(available/100.0)}\n\nCash out sends these earnings to your Stripe connected account. Stripe then pays your linked bank account according to its payout timing.").setNegativeButton("Cancel",null).setPositiveButton(if(available>=100) "Cash out all" else "OK") { _,_-> if(available>=100) cashOutAll() }.show()
-                    }
-                }
-            } catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not load payout status"}}
-        }
-    }
-
-    private fun startPayoutOnboarding() {
-        status.text="Opening secure Stripe setup…"
-        thread { try { val r=Api.payoutOnboard(this); val url=r.optString("url"); runOnUiThread { if(url.isBlank()) status.text="Stripe setup link was not returned" else startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url))) } } catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not start payout setup"}} }
-    }
-
-    private fun cashOutAll() {
-        status.text="Sending payout…"
-        thread { try { val r=Api.payoutRequest(this); runOnUiThread { AlertDialog.Builder(this).setTitle("Payout sent").setMessage("$${"%.2f".format(r.optInt("amount_cents")/100.0)} was sent to your Stripe payout account.").setPositiveButton("OK",null).show(); refresh() } } catch(e:Exception){runOnUiThread{status.text=e.message?:"Cash out failed"}} }
-    }
-
-    private fun logout() {
-        stopGps(); thread { try { Api.logout(this) } catch (_:Exception) { }; Api.clearToken(this); runOnUiThread { showEntry() } }
-    }
+    private fun openMoney(){status.text="Loading money…";thread{try{val m=Api.money(this);runOnUiThread{val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(20,0,20,0)};box.addView(label("Available $${"%.2f".format(m.optInt("available_cents")/100.0)}",22f,Color.WHITE));box.addView(label("Pending $${"%.2f".format(m.optInt("pending_cents")/100.0)} · Completed ${m.optInt("completed")}",14f,muted));box.addView(label("Tracked work miles ${m.optDouble("active_miles")} · Expenses $${"%.2f".format(m.optInt("expense_cents")/100.0)}",14f,muted));box.addView(label("Estimated profit $${"%.2f".format(m.optInt("estimated_profit_cents")/100.0)}",16f,lime));box.addView(button("Cash out / payout setup",true){loadPayouts()});box.addView(button("Add expense"){openExpense()});box.addView(button("Download weekly summary"){openUrl(m.optString("weekly_report_url"))});box.addView(button("Download monthly summary"){openUrl(m.optString("monthly_report_url"))});AlertDialog.Builder(this).setTitle("Money").setView(box).setPositiveButton("Close",null).show()}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not load money"}}}}
+    private fun openExpense(){val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(20,0,20,0)};val amt=input("Amount, e.g. 18.40");val note=input("Gas, parking, supplies, etc.");box.addView(amt);box.addView(note);AlertDialog.Builder(this).setTitle("Add work expense").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save"){_,_->val c=((amt.text.toString().toDoubleOrNull()?:0.0)*100).toInt();if(c>0)runAction{Api.expense(this,c,"driver_expense",note.text.toString())}}.show()}
+    private fun loadPayouts(){thread{try{val p=Api.payout(this);runOnUiThread{val available=p.optInt("available_cents");if(!p.optBoolean("connected")||!p.optBoolean("details_submitted")||!p.optBoolean("transfers_active")){AlertDialog.Builder(this).setTitle("Set up payouts").setMessage("Stripe Express securely collects your payout information. LocalLoop never stores your bank details.").setNegativeButton("Later",null).setPositiveButton("Set up"){_,_->startPayoutOnboarding()}.show()}else AlertDialog.Builder(this).setTitle("Cash out").setMessage("Available: $${"%.2f".format(available/100.0)}").setNegativeButton("Cancel",null).setPositiveButton(if(available>=100)"Cash out all" else "OK"){_,_->if(available>=100)cashOutAll()}.show()}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Payout error"}}}}
+    private fun startPayoutOnboarding(){thread{try{val r=Api.payoutOnboard(this);runOnUiThread{openUrl(r.optString("url"))}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Could not start payout setup"}}}}
+    private fun cashOutAll(){thread{try{val r=Api.payoutRequest(this);runOnUiThread{AlertDialog.Builder(this).setTitle("Payout sent").setMessage("$${"%.2f".format(r.optInt("amount_cents")/100.0)} sent to your Stripe connected account.").setPositiveButton("OK",null).show();refresh()}}catch(e:Exception){runOnUiThread{status.text=e.message?:"Payout failed"}}}}
+    private fun openUrl(url:String){if(url.isNotBlank())startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url)))}
+    private fun logout(){stopGps();thread{try{Api.logout(this)}catch(_:Exception){};Api.clearToken(this);runOnUiThread{showEntry()}}}
 }
