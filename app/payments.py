@@ -36,6 +36,7 @@ def _create_checkout(request:Request,amount:int,name:str,kind:str,oid:int):
         'mode':'payment',
         'success_url':success,
         'cancel_url':cancel,
+        'client_reference_id':f'{kind}:{oid}',
         'line_items[0][price_data][currency]':'usd',
         'line_items[0][price_data][unit_amount]':str(amount),
         'line_items[0][price_data][product_data][name]':name,
@@ -46,7 +47,33 @@ def _create_checkout(request:Request,amount:int,name:str,kind:str,oid:int):
     return stripe('POST','/checkout/sessions',data=data)
 
 def _session_paid(session:dict):
-    return (session.get('payment_status') or '').lower()=='paid' or (session.get('status') or '').lower()=='complete'
+    # Stripe can mark a Checkout Session complete before an asynchronous
+    # payment method has actually settled. LocalLoop only releases an order
+    # when Stripe explicitly reports payment_status=paid.
+    return (session.get('payment_status') or '').lower()=='paid'
+
+def _mark_shopping_paid(con,oid:int,session_id:str):
+    con.execute("UPDATE shopping_orders SET payment_provider_ref=?,payment_status='funded',status='posted',updated_at=? WHERE id=? AND status='awaiting_payment'",(session_id,now(),oid))
+    con.execute("UPDATE payment_records SET status='funded' WHERE shopping_order_id=? AND provider_ref=?",(oid,session_id))
+
+def _mark_marketplace_paid(con,oid:int,session_id:str):
+    order=con.execute('SELECT * FROM marketplace_orders WHERE id=?',(oid,)).fetchone()
+    if not order:
+        return
+    if order['status']=='paid' and order['payment_status']=='funded':
+        con.execute("UPDATE payment_records SET status='funded' WHERE provider_ref=?",(session_id,))
+        return
+    if order['status']!='awaiting_payment':
+        return
+    cur=con.execute('UPDATE marketplace_listings SET quantity=quantity-?,active=CASE WHEN quantity-?<=0 THEN 0 ELSE active END,updated_at=? WHERE id=? AND quantity>=?',(order['quantity'],order['quantity'],now(),order['listing_id'],order['quantity']))
+    if cur.rowcount!=1:
+        # Money may already be captured. Do not silently mark the order paid
+        # without inventory; leave it for owner/refund review.
+        con.execute("UPDATE marketplace_orders SET payment_provider_ref=?,payment_status='review_required',updated_at=? WHERE id=?",(session_id,now(),oid))
+        con.execute("UPDATE payment_records SET status='review_required' WHERE provider_ref=?",(session_id,))
+        return
+    con.execute("UPDATE marketplace_orders SET payment_provider_ref=?,payment_status='funded',status='paid',updated_at=? WHERE id=?",(session_id,now(),oid))
+    con.execute("UPDATE payment_records SET status='funded' WHERE provider_ref=?",(session_id,))
 
 @app.on_event('startup')
 def payments_startup():
@@ -93,8 +120,11 @@ def stripe_shop_success(oid:int,request:Request,session_id:str):
     with db() as con:
         o=con.execute('SELECT * FROM shopping_orders WHERE id=? AND customer_id=?',(oid,u['id'])).fetchone()
         if not o: raise HTTPException(404)
-        con.execute('UPDATE shopping_orders SET payment_provider_ref=?,payment_status=?,status=?,updated_at=? WHERE id=?',(session_id,'funded' if paid else 'pending','posted' if paid else 'awaiting_payment',now(),oid))
-        con.execute('UPDATE payment_records SET status=? WHERE shopping_order_id=? AND provider_ref=?',('funded' if paid else 'pending',oid,session_id))
+        if paid:
+            _mark_shopping_paid(con,oid,session_id)
+        else:
+            con.execute("UPDATE shopping_orders SET payment_provider_ref=?,payment_status='pending',status='awaiting_payment',updated_at=? WHERE id=?",(session_id,now(),oid))
+            con.execute("UPDATE payment_records SET status='pending' WHERE shopping_order_id=? AND provider_ref=?",(oid,session_id))
     return RedirectResponse('/shop',303)
 
 @app.get('/admin/payout-settings',response_class=HTMLResponse)
@@ -117,7 +147,7 @@ def payout_settings_save(request:Request,legal_name:str=Form(...),business_name:
 @app.get('/payments/status')
 def payment_status(request:Request):
     require_user(request)
-    return JSONResponse({'portal':'LocalLoop Pay','processor':'stripe','configured':configured(),'environment':'live' if STRIPE_SECRET_KEY.startswith('sk_live_') else 'test','checks_accepted':False})
+    return JSONResponse({'portal':'LocalLoop Pay','processor':'stripe','configured':configured(),'environment':'live' if STRIPE_SECRET_KEY.startswith('sk_live_') else 'test','webhook_configured':bool(STRIPE_WEBHOOK_SECRET),'checks_accepted':False})
 
 @app.post('/api/payments/stripe/webhook')
 async def stripe_webhook(request:Request):
@@ -133,12 +163,18 @@ async def stripe_webhook(request:Request):
     signed=f'{ts}.'.encode()+body
     expected=hmac.new(STRIPE_WEBHOOK_SECRET.encode(),signed,hashlib.sha256).hexdigest()
     if not any(hmac.compare_digest(expected,v) for v in parts.get('v1',[])): raise HTTPException(400,'Invalid Stripe signature.')
-    event=json.loads(body.decode())
-    if event.get('type')=='checkout.session.completed':
-        s=(event.get('data') or {}).get('object') or {}; meta=s.get('metadata') or {}; oid=int(meta.get('order_id') or 0)
+    try:
+        event=json.loads(body.decode())
+    except Exception:
+        raise HTTPException(400,'Invalid Stripe webhook payload.')
+    if event.get('type') in {'checkout.session.completed','checkout.session.async_payment_succeeded'}:
+        s=(event.get('data') or {}).get('object') or {}; meta=s.get('metadata') or {}
+        try: oid=int(meta.get('order_id') or 0)
+        except Exception: oid=0
         if oid and _session_paid(s):
             with db() as con:
                 if meta.get('kind')=='shopping':
-                    con.execute("UPDATE shopping_orders SET payment_provider_ref=?,payment_status='funded',status='posted',updated_at=? WHERE id=? AND status='awaiting_payment'",(s.get('id',''),now(),oid))
-                    con.execute("UPDATE payment_records SET status='funded' WHERE shopping_order_id=? AND provider_ref=?",(oid,s.get('id','')))
+                    _mark_shopping_paid(con,oid,s.get('id',''))
+                elif meta.get('kind')=='marketplace':
+                    _mark_marketplace_paid(con,oid,s.get('id',''))
     return {'received':True}
