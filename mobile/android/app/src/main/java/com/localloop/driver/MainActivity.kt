@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.widget.*
@@ -118,10 +119,27 @@ class MainActivity : Activity() {
         for (i in 0 until offers.length()) addJobCard(offers.getJSONObject(i), false)
     }
 
+    private fun navigateTo(address: String, label: String) {
+        if (address.isBlank()) {
+            status.text = "No address is available for $label"
+            return
+        }
+        val navUri = Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")
+        val mapsIntent = Intent(Intent.ACTION_VIEW, navUri).apply { setPackage("com.google.android.apps.maps") }
+        try {
+            startActivity(mapsIntent)
+        } catch (_: Exception) {
+            val web = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(address)}&travelmode=driving&dir_action=navigate")
+            startActivity(Intent(Intent.ACTION_VIEW, web))
+        }
+    }
+
     private fun addJobCard(job: JSONObject, active: Boolean) {
         val id = job.getInt("id")
         val type = job.optString("job_type", "delivery")
         val isShopping = type == "shopping"
+        val pickup = job.optString("pickup")
+        val dropoff = job.optString("dropoff")
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(18,18,18,18); setBackgroundColor(Color.rgb(20,29,48))
         }
@@ -131,7 +149,7 @@ class MainActivity : Activity() {
         } else {
             box.addView(label("Delivery #$id · $${"%.2f".format(job.optInt("driver_pay_cents")/100.0)} · ${job.optDouble("distance_miles")} mi"))
         }
-        box.addView(label("${job.optString("pickup")} → ${job.optString("dropoff")}"))
+        box.addView(label("$pickup → $dropoff"))
         box.addView(label(job.optString("item_description")))
 
         if (!active) {
@@ -140,8 +158,12 @@ class MainActivity : Activity() {
             })
         } else if (isShopping) {
             when (job.optString("status")) {
-                "accepted" -> box.addView(button("Start shopping") { doAction { Api.shoppingStatus(this,id,"shopping") } })
+                "accepted" -> {
+                    box.addView(button("Navigate to store") { navigateTo(pickup,"store") })
+                    box.addView(button("Start shopping") { doAction { Api.shoppingStatus(this,id,"shopping") } })
+                }
                 "shopping" -> {
+                    box.addView(button("Navigate to store") { navigateTo(pickup,"store") })
                     val total = input("Actual merchandise total, e.g. 8.75")
                     box.addView(total)
                     box.addView(button("Finish shopping / start delivery") {
@@ -150,11 +172,16 @@ class MainActivity : Activity() {
                         else doAction { Api.shoppingStatus(this,id,"delivering",cents) }
                     })
                 }
-                "delivering" -> box.addView(button("Complete shopping delivery") { doAction { Api.shoppingStatus(this,id,"delivered") } })
+                "delivering" -> {
+                    box.addView(button("Navigate to customer") { navigateTo(dropoff,"customer") })
+                    box.addView(button("Complete shopping delivery") { doAction { Api.shoppingStatus(this,id,"delivered") } })
+                }
             }
         } else if (job.optString("status") == "accepted") {
+            box.addView(button("Navigate to pickup") { navigateTo(pickup,"pickup") })
             box.addView(button("Mark picked up") { doAction { Api.status(this,id,"picked_up") } })
         } else {
+            box.addView(button("Navigate to customer") { navigateTo(dropoff,"customer") })
             val proof = input("Delivery note / proof")
             val handoff = input("Customer handoff code if required")
             box.addView(proof); box.addView(handoff)
