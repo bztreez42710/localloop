@@ -24,7 +24,7 @@ class LocationService : Service() {
         }
         val notification = Notification.Builder(this, channelId)
             .setContentTitle("LocalLoop Driver")
-            .setContentText("Sharing location for your active delivery")
+            .setContentText("Live GPS is active for your current job")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
             .build()
@@ -33,8 +33,15 @@ class LocationService : Service() {
         callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val loc = result.lastLocation ?: return
+                val speed = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0
+                val bearing = if (loc.hasBearing()) loc.bearing.toDouble() else 0.0
+                val accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 0.0
+                getSharedPreferences("localloop", MODE_PRIVATE).edit()
+                    .putFloat("last_speed_mph", (speed * 2.236936).toFloat())
+                    .putFloat("last_accuracy_m", accuracy.toFloat())
+                    .apply()
                 thread {
-                    try { Api.location(this@LocationService, loc.latitude, loc.longitude) }
+                    try { Api.location(this@LocationService, loc.latitude, loc.longitude, speed, bearing, accuracy) }
                     catch (_: Exception) { }
                 }
             }
@@ -46,14 +53,16 @@ class LocationService : Service() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             stopSelf(); return
         }
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000L)
-            .setMinUpdateIntervalMillis(5000L)
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
+            .setMinUpdateIntervalMillis(2500L)
+            .setMinUpdateDistanceMeters(4f)
             .build()
         client.requestLocationUpdates(request, callback, mainLooper)
     }
 
     override fun onDestroy() {
         if (::callback.isInitialized) client.removeLocationUpdates(callback)
+        getSharedPreferences("localloop", MODE_PRIVATE).edit().remove("last_speed_mph").remove("last_accuracy_m").apply()
         super.onDestroy()
     }
 
