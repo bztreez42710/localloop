@@ -41,11 +41,16 @@ object Api {
     fun me(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/me")
     fun offers(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/offers")
     fun earnings(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/earnings")
+    fun payout(ctx: Context): JSONObject = request(ctx,"GET","/api/mobile/payout")
+    fun payoutOnboard(ctx: Context): JSONObject = request(ctx,"POST","/api/mobile/payout/onboard")
+    fun payoutRequest(ctx: Context, amountCents: Int = 0): JSONObject = request(ctx,"POST","/api/mobile/payout/request", mapOf("amount_cents" to amountCents.toString()))
     fun online(ctx: Context, on: Boolean): JSONObject = request(ctx,"POST","/api/mobile/online", mapOf("online" to if(on) "1" else "0"))
     fun accept(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/deliveries/$id/accept")
     fun status(ctx: Context, id: Int, status: String, proof: String = "", handoff: String = ""): JSONObject = request(ctx,"POST","/api/mobile/deliveries/$id/status", mapOf("status" to status,"proof" to proof,"handoff_code" to handoff))
     fun acceptShopping(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/accept")
     fun shoppingStatus(ctx: Context, id: Int, status: String, actualGoodsCents: Int = 0): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/status", mapOf("status" to status,"actual_goods_cents" to actualGoodsCents.toString()))
-    fun location(ctx: Context, lat: Double, lon: Double): JSONObject = request(ctx,"POST","/api/mobile/location", mapOf("latitude" to lat.toString(),"longitude" to lon.toString()))
+    fun location(ctx: Context, lat: Double, lon: Double, speedMps: Double = 0.0, bearing: Double = 0.0, accuracyM: Double = 0.0): JSONObject = request(ctx,"POST","/api/mobile/location", mapOf(
+        "latitude" to lat.toString(),"longitude" to lon.toString(),"speed_mps" to speedMps.toString(),"bearing" to bearing.toString(),"accuracy_m" to accuracyM.toString()
+    ))
     fun logout(ctx: Context): JSONObject = request(ctx,"POST","/api/mobile/logout")
 }
