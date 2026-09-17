@@ -44,6 +44,8 @@ object Api {
     fun online(ctx: Context, on: Boolean): JSONObject = request(ctx,"POST","/api/mobile/online", mapOf("online" to if(on) "1" else "0"))
     fun accept(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/deliveries/$id/accept")
     fun status(ctx: Context, id: Int, status: String, proof: String = "", handoff: String = ""): JSONObject = request(ctx,"POST","/api/mobile/deliveries/$id/status", mapOf("status" to status,"proof" to proof,"handoff_code" to handoff))
+    fun acceptShopping(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/accept")
+    fun shoppingStatus(ctx: Context, id: Int, status: String, actualGoodsCents: Int = 0): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/status", mapOf("status" to status,"actual_goods_cents" to actualGoodsCents.toString()))
     fun location(ctx: Context, lat: Double, lon: Double): JSONObject = request(ctx,"POST","/api/mobile/location", mapOf("latitude" to lat.toString(),"longitude" to lon.toString()))
     fun logout(ctx: Context): JSONObject = request(ctx,"POST","/api/mobile/logout")
 }
