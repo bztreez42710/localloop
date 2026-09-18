@@ -73,6 +73,8 @@ object Api {
     fun accept(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/deliveries/$id/accept")
     fun status(ctx: Context, id: Int, status: String, proof: String = "", handoff: String = ""): JSONObject = postQueueable(ctx,"/api/mobile/deliveries/$id/status", mapOf("status" to status,"proof" to proof,"handoff_code" to handoff))
     fun acceptShopping(ctx: Context, id: Int): JSONObject = request(ctx,"POST","/api/mobile/shopping/$id/accept")
+    fun acceptTask(ctx:Context,id:Int):JSONObject=request(ctx,"POST","/api/mobile/tasks/$id/accept")
+    fun completeTask(ctx:Context,id:Int,note:String=""):JSONObject=postQueueable(ctx,"/api/mobile/tasks/$id/complete",mapOf("note" to note))
     fun shoppingStatus(ctx: Context, id: Int, status: String, actualGoodsCents: Int = 0): JSONObject = postQueueable(ctx,"/api/mobile/shopping/$id/status", mapOf("status" to status,"actual_goods_cents" to actualGoodsCents.toString()))
     fun nextShoppingStop(ctx:Context,id:Int):JSONObject=request(ctx,"POST","/api/mobile/shopping/$id/next-stop")
     fun location(ctx: Context, lat: Double, lon: Double, speedMps: Double = 0.0, bearing: Double = 0.0, accuracyM: Double = 0.0): JSONObject {
