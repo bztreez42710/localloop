@@ -222,7 +222,7 @@ class MainActivity : Activity() {
         val currentJob = dashboard.optJSONObject("current_job")
         renderCockpit(currentJob)
         renderOffers(dashboard.optJSONArray("offers") ?: JSONArray())
-        if (online && currentJob != null) startGps()
+        if (online && currentJob != null && currentJob.optString("kind") != "task") startGps()
     }
 
     private fun renderCockpit(job: JSONObject?) {
@@ -239,7 +239,9 @@ class MainActivity : Activity() {
         val kind = job.optString("kind")
         val id = job.optInt("id")
         val isShopping = kind == "shopping"
-        box.addView(eyebrow("Current ${if (isShopping) "shopping" else "delivery"} #$id"))
+        val isTask = kind == "task"
+        val currentLabel = if (isTask) "task" else if (isShopping) "shopping" else "delivery"
+        box.addView(eyebrow("Current $currentLabel #$id"))
         box.addView(label(job.optString("stage"), 24f, Color.WHITE))
         box.addView(label(job.optString("next_label"), 15f, lime))
         box.addView(label(job.optString("next_address"), 15f))
@@ -248,7 +250,9 @@ class MainActivity : Activity() {
         if (eta > 0) {
             box.addView(label("About $eta min · ${job.optDouble("distance_to_next_miles", 0.0)} mi to next stop", 15f, muted))
         }
-        box.addView(label("Expected earnings: $${"%.2f".format(job.optInt("expected_earnings_cents") / 100.0)} · Trip ${job.optDouble("trip_miles", 0.0)} mi", 15f, muted))
+        val payLabel = if (isTask) "Offered pay" else "Expected earnings"
+        val tripLabel = if (isTask) "" else " · Trip ${job.optDouble("trip_miles", 0.0)} mi"
+        box.addView(label("$payLabel: ${"%.2f".format(job.optInt("expected_earnings_cents") / 100.0)}$tripLabel", 15f, muted))
         if (isShopping && job.optInt("stop_count", 1) > 1) {
             box.addView(label("Store ${job.optInt("current_stop_index", 0) + 1} of ${job.optInt("stop_count")}", 14f, muted))
         }
@@ -258,18 +262,26 @@ class MainActivity : Activity() {
         if (job.optBoolean("route_deviation")) box.addView(label("⚠ You appear well off the expected route.", 15f, Color.rgb(255, 200, 90)))
 
         box.addView(button("Navigate to ${job.optString("next_label")}", primary = true) { navigateTo(job.optString("next_address")) })
-        addMessageButtons(box)
-        box.addView(button("SOS / report safety incident", danger = true) { openIncident() })
-        if (isShopping) box.addView(button("Route order: optimized / original") { chooseRoute(id) })
-        box.addView(button("Take delivery proof photo") { captureMode = "proof"; openCamera() })
-        if (isShopping) box.addView(button("Take receipt photo") { captureMode = "receipt"; openCamera() })
+        if (!isTask) {
+            addMessageButtons(box)
+            box.addView(button("SOS / report safety incident", danger = true) { openIncident() })
+            if (isShopping) box.addView(button("Route order: optimized / original") { chooseRoute(id) })
+            box.addView(button("Take delivery proof photo") { captureMode = "proof"; openCamera() })
+            if (isShopping) box.addView(button("Take receipt photo") { captureMode = "receipt"; openCamera() })
+        }
 
         val jobStatus = job.optString("status")
         when {
-            !isShopping && jobStatus == "accepted" -> {
+            isTask && jobStatus == "accepted" -> {
+                box.addView(button("Mark task finished", primary = true) { completeTask(id) })
+            }
+            isTask && jobStatus == "awaiting_confirmation" -> {
+                box.addView(label("Waiting for the customer to confirm completion.", 15f, muted))
+            }
+            !isTask && !isShopping && jobStatus == "accepted" -> {
                 box.addView(button("Mark picked up", primary = true) { runAction { Api.status(this, id, "picked_up") } })
             }
-            !isShopping && jobStatus == "picked_up" -> {
+            !isTask && !isShopping && jobStatus == "picked_up" -> {
                 box.addView(button("Complete delivery", primary = true) { completeDelivery(id, false) })
             }
             isShopping && jobStatus == "accepted" -> {
@@ -345,23 +357,45 @@ class MainActivity : Activity() {
         for (i in 0 until offers.length()) {
             val offer = offers.getJSONObject(i)
             val box = cardBox()
-            val shopping = offer.optString("job_type") == "shopping"
+            val jobType = offer.optString("job_type")
+            val shopping = jobType == "shopping"
+            val task = jobType == "task"
             val id = offer.optInt("id")
-            box.addView(eyebrow(if (shopping) "Shopping #$id" else "Delivery #$id"))
+            val heading = if (task) "Task #$id" else if (shopping) "Shopping #$id" else "Delivery #$id"
+            box.addView(eyebrow(heading))
+            if (task && offer.optString("title").isNotBlank()) box.addView(label(offer.optString("title"), 19f, Color.WHITE))
             box.addView(label("$${"%.2f".format(offer.optInt("driver_pay_cents") / 100.0)}", 24f, Color.WHITE))
             val payPerMile = if (offer.isNull("pay_per_mile")) "" else " · $${"%.2f".format(offer.optDouble("pay_per_mile"))}/mi"
-            box.addView(label("${offer.optInt("stop_count", 1)} stop(s) · ~${offer.optInt("estimated_minutes", 0)} min$payPerMile", 14f, muted))
+            if (!task) box.addView(label("${offer.optInt("stop_count", 1)} stop(s) · ~${offer.optInt("estimated_minutes", 0)} min$payPerMile", 14f, muted))
             box.addView(label(offer.optString("complexity"), 14f, muted))
-            box.addView(label("${offer.optString("pickup")} → ${offer.optString("dropoff")}", 14f))
-            box.addView(button(if (shopping) "Accept shopping job" else "Accept delivery", primary = true) {
-                runAction(startGpsAfter = true) {
-                    if (shopping) Api.acceptShopping(this, id) else Api.accept(this, id)
+            if (task) {
+                box.addView(label(offer.optString("item_description"), 14f))
+                val timing = offer.optString("timing_text")
+                val taskMeta = "Location: ${offer.optString("pickup")}" + if (timing.isNotBlank()) " · $timing" else ""
+                box.addView(label(taskMeta, 14f, muted))
+            } else {
+                box.addView(label("${offer.optString("pickup")} → ${offer.optString("dropoff")}", 14f))
+            }
+            val acceptText = if (task) "Accept task" else if (shopping) "Accept shopping job" else "Accept delivery"
+            box.addView(button(acceptText, primary = true) {
+                runAction(startGpsAfter = !task) {
+                    if (task) Api.acceptTask(this, id) else if (shopping) Api.acceptShopping(this, id) else Api.accept(this, id)
                 }
             })
             offersBox.addView(box)
         }
     }
 
+    private fun completeTask(id: Int) {
+        val note = input("Completion note (optional)")
+        AlertDialog.Builder(this)
+            .setTitle("Mark task finished")
+            .setMessage("The customer will be asked to confirm that the task is complete.")
+            .setView(note)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Finished") { _, _ -> runAction { Api.completeTask(this, id, note.text.toString()) } }
+            .show()
+    }
     private fun navigateTo(address: String) {
         if (address.isBlank()) return
         val maps = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(address)}&mode=d")).apply {
