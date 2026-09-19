@@ -83,6 +83,36 @@ class MainActivity : Activity() {
         ).apply { setMargins(0, 8, 0, 8) }
     }
 
+
+    private fun artBanner(drawableId: Int, heading: String, subtext: String, compact: Boolean = false): FrameLayout {
+        val frame = FrameLayout(this).apply {
+            background = rounded(Color.rgb(12, 24, 39), 22f, Color.rgb(49, 69, 92))
+            clipToOutline = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                if (compact) 150 else 190
+            ).apply { setMargins(0, 10, 0, 12) }
+        }
+        val art = ImageView(this).apply {
+            setImageResource(drawableId)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = if (compact) .28f else .38f
+        }
+        frame.addView(art, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val shade = View(this).apply { background = rounded(Color.argb(116, 4, 12, 22), 22f) }
+        frame.addView(shade, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val copy = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.BOTTOM
+            setPadding(22, 18, 22, 18)
+            addView(eyebrow("LocalLoop"))
+            addView(label(heading, if (compact) 19f else 23f, Color.WHITE).apply { setTypeface(typeface, Typeface.BOLD) })
+            addView(label(subtext, 13f, Color.rgb(220, 228, 238)))
+        }
+        frame.addView(copy, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        return frame
+    }
+
     private fun button(textValue: String, primary: Boolean = false, danger: Boolean = false, click: () -> Unit) = Button(this).apply {
         text = textValue
         isAllCaps = false
@@ -166,6 +196,7 @@ class MainActivity : Activity() {
         root.addView(eyebrow("LocalLoop"))
         root.addView(title("Driver cockpit"))
         root.addView(label("Your current job stays front and center. Navigation, GPS, safety, money, and offers stay one tap away.", 14f, muted))
+        root.addView(artBanner(R.drawable.courier_bg, "Your city. Your route. Your work.", "LocalLoop keeps the active job, navigation and earnings in one focused cockpit."))
 
         val summary = cardBox()
         status = label("Loading…", 17f)
@@ -187,6 +218,7 @@ class MainActivity : Activity() {
 
         cockpit = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(cockpit)
+        root.addView(artBanner(R.drawable.ecosystem_bg, "One local network", "Delivery, personal shopping and community tasks come together here.", compact = true))
         root.addView(eyebrow("Available offers"))
         offersBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(offersBox)
@@ -236,6 +268,7 @@ class MainActivity : Activity() {
         }
 
         val box = cardBox()
+        box.addView(artBanner(R.drawable.route_bg, "Live job guidance", "Next stop, ETA and route context stay visible while you work.", compact = true))
         val kind = job.optString("kind")
         val id = job.optInt("id")
         val isShopping = kind == "shopping"
