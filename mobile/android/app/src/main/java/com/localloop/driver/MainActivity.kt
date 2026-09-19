@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Base64
 import android.view.Gravity
+import android.view.View
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
