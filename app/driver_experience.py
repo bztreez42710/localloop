@@ -193,7 +193,7 @@ def _enhanced_offers(con):
     for r in con.execute("SELECT * FROM deliveries WHERE status='posted' ORDER BY id DESC LIMIT 40").fetchall():
         x=dict(r); miles=max(.1,float(x.get('distance_miles') or 0)); x.update({'job_type':'delivery','stop_count':1,'estimated_minutes':max(5,round(miles/24*60)),'complexity':'Standard delivery','pay_per_mile':round(int(x['driver_pay_cents'])/100/miles,2)}); offers.append(x)
     for r in con.execute("SELECT * FROM shopping_orders WHERE status='posted' AND payment_status='funded' ORDER BY id DESC LIMIT 40").fetchall():
-        x=_shopping_job(con,r); stops=_shop_stops(con,r['id']); complexity='Simple' if len(stops)==1 else ('Multi-store' if len(stops)<=3 else 'Complex'); est=max(20,len(stops)*18); x.update({'stop_count':len(stops),'estimated_minutes':est,'complexity':complexity,'pay_per_mile':None}); offers.append(x)
+        x=_shopping_job(con,r); stops=_shop_stops(con,r['id']); thrift=(dict(r).get('shopping_type')=='thrift_mystery'); complexity='Mystery thrift · fixed job pay' if thrift else ('Simple' if len(stops)==1 else ('Multi-store' if len(stops)<=3 else 'Complex')); est=max(20,len(stops)*18); x.update({'stop_count':len(stops),'estimated_minutes':est,'complexity':complexity,'pay_per_mile':None,'shopping_type':dict(r).get('shopping_type','standard'),'mystery_theme':dict(r).get('mystery_theme','')}); offers.append(x)
     return offers
 
 @app.get('/api/mobile/smart-dashboard')
