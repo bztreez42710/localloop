@@ -54,7 +54,7 @@ def marketplace_startup():
     with db() as con:
         con.executescript(SHOP_SCHEMA)
         cols={r['name'] for r in con.execute('PRAGMA table_info(shopping_orders)').fetchall()}
-        migrations={'cancelled_at':'TEXT','estimated_goods_cents':'INTEGER DEFAULT 0','actual_goods_cents':'INTEGER DEFAULT 0','payment_provider_ref':"TEXT DEFAULT ''",'payment_status':"TEXT DEFAULT 'unfunded'",'receipt_photo':"TEXT DEFAULT ''"}
+        migrations={'cancelled_at':'TEXT','estimated_goods_cents':'INTEGER DEFAULT 0','actual_goods_cents':'INTEGER DEFAULT 0','payment_provider_ref':"TEXT DEFAULT ''",'payment_status':"TEXT DEFAULT 'unfunded'",'receipt_photo':"TEXT DEFAULT ''",'shopping_type':"TEXT DEFAULT 'standard'",'mystery_theme':"TEXT DEFAULT ''"}
         for name,definition in migrations.items():
             if name not in cols: con.execute(f'ALTER TABLE shopping_orders ADD COLUMN {name} {definition}')
 
@@ -83,6 +83,58 @@ def create_shopping_order(request:Request,dropoff:str=Form(...),store1:str=Form(
         cur=con.execute('INSERT INTO shopping_orders(customer_id,dropoff,notes,status,driver_pay_cents,platform_fee_cents,estimated_goods_cents,payment_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(u['id'],dropoff.strip(),notes.strip(),'awaiting_payment',driver_pay,fee,goods,'unfunded',t,t)); oid=cur.lastrowid
         for n,(store,address,items) in enumerate(stops,1): con.execute('INSERT INTO shopping_stops(order_id,stop_number,store_name,store_address,shopping_list) VALUES(?,?,?,?,?)',(oid,n,store,address,items))
     return RedirectResponse('/shop',303)
+
+@app.post('/shop/thrift-orders')
+def create_thrift_mystery_order(
+    request:Request,
+    dropoff:str=Form(...),
+    thrift_store:str=Form(...),
+    store_address:str=Form(''),
+    merchandise_budget_dollars:float=Form(...),
+    shopper_job_pay_dollars:float=Form(...),
+    mystery_theme:str=Form(...),
+    sizes:str=Form(''),
+    wish_list:str=Form(''),
+    avoid_items:str=Form(''),
+    notes:str=Form('')
+):
+    u=require_user(request)
+    if u['role'] not in {'customer','business','admin'}: raise HTTPException(403)
+    if not is_spokane(dropoff): raise HTTPException(400,'LocalLoop thrift shopping currently delivers only to Spokane, Washington (992xx).')
+    if store_address and not is_spokane(store_address): raise HTTPException(400,'The thrift-store address must be in Spokane, Washington (992xx).')
+    if merchandise_budget_dollars<10 or merchandise_budget_dollars>500:
+        raise HTTPException(400,'Mystery thrift merchandise budgets must be between $10 and $500.')
+    if shopper_job_pay_dollars<10 or shopper_job_pay_dollars>150:
+        raise HTTPException(400,'Fixed shopper job pay must be between $10 and $150.')
+    theme=(mystery_theme or '').strip()
+    if not theme: raise HTTPException(400,'Tell the shopper what kind of mystery thrift haul you want.')
+    store=(thrift_store or '').strip()
+    if not store: raise HTTPException(400,'Choose a thrift store or enter “Shopper choice”.')
+    goods=round(merchandise_budget_dollars*100)
+    driver_pay=round(shopper_job_pay_dollars*100)
+    fee=max(200,round(driver_pay*.15))
+    brief=[
+        'MYSTERY THRIFT SHOPPING JOB — fixed pay for the completed job, not hourly.',
+        f'Theme / vibe: {theme[:500]}',
+        f'Sizes / fit: {(sizes or "No size preference supplied")[:400]}',
+        f'Wish list / priorities: {(wish_list or "Use your judgment within the theme")[:1000]}',
+        f'Avoid / do not buy: {(avoid_items or "No additional exclusions supplied")[:800]}',
+        'Use your judgment to build a surprise haul within the funded merchandise budget. Do not exceed the budget.',
+    ]
+    if notes.strip(): brief.append(f'Customer notes: {notes.strip()[:1000]}')
+    shopping_list='\n'.join(brief)
+    t=now()
+    with db() as con:
+        cur=con.execute(
+            'INSERT INTO shopping_orders(customer_id,dropoff,notes,status,driver_pay_cents,platform_fee_cents,estimated_goods_cents,payment_status,shopping_type,mystery_theme,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            (u['id'],dropoff.strip(),shopping_list,'awaiting_payment',driver_pay,fee,goods,'unfunded','thrift_mystery',theme[:500],t,t)
+        )
+        oid=cur.lastrowid
+        con.execute(
+            'INSERT INTO shopping_stops(order_id,stop_number,store_name,store_address,shopping_list) VALUES(?,?,?,?,?)',
+            (oid,1,store,store_address.strip(),shopping_list)
+        )
+    return RedirectResponse('/shop?created=thrift',303)
 
 @app.post('/shop/orders/{oid}/cancel')
 def cancel_shopping_order(oid:int,request:Request):
