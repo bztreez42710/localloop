@@ -189,9 +189,11 @@ def shopping_order_status(oid:int,request:Request,status:str=Form(...),actual_go
             con.execute("UPDATE shopping_orders SET status='delivered',delivered_at=?,updated_at=? WHERE id=?",(now(),now(),oid))
             payout=o['driver_pay_cents']+o['actual_goods_cents']
             con.execute('UPDATE driver_profiles SET completed=completed+1,payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(payout,u['id']))
-            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'shopping_reimbursement',payout,f'Shopping order #{oid}: merchandise reimbursement + driver pay',now()))
+            con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'driver_earning',o['driver_pay_cents'],f'Shopping order #{oid}: fixed shopper job pay',now()))
+            if o['actual_goods_cents']:
+                con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'shopping_reimbursement',o['actual_goods_cents'],f'Shopping order #{oid}: customer merchandise reimbursement',now()))
             con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(NULL,NULL,?,?,?,?)',('platform_fee',o['platform_fee_cents'],f'Shopping order #{oid}',now()))
-            con.execute("INSERT INTO payment_records(user_id,shopping_order_id,provider,amount_cents,status,kind,created_at) VALUES(?,?,?,?,?,?,?)",(u['id'],oid,'finix',payout,'pending','shopper_payout',now()))
+            con.execute("INSERT INTO payment_records(user_id,shopping_order_id,provider,amount_cents,status,kind,created_at) VALUES(?,?,?,?,?,?,?)",(u['id'],oid,'localloop_balance',payout,'pending','shopper_payout',now()))
         else: con.execute("UPDATE shopping_orders SET status='shopping',updated_at=? WHERE id=?",(now(),oid))
     return RedirectResponse('/driver/shop',303)
 
