@@ -394,11 +394,17 @@ class MainActivity : Activity() {
             val jobType = offer.optString("job_type")
             val shopping = jobType == "shopping"
             val task = jobType == "task"
+            val thrift = shopping && offer.optString("shopping_type") == "thrift_mystery"
             val id = offer.optInt("id")
-            val heading = if (task) "Task #$id" else if (shopping) "Shopping #$id" else "Delivery #$id"
+            val heading = if (task) "Task #$id" else if (thrift) "Mystery thrift #$id" else if (shopping) "Shopping #$id" else "Delivery #$id"
             box.addView(eyebrow(heading))
             if (task && offer.optString("title").isNotBlank()) box.addView(label(offer.optString("title"), 19f, Color.WHITE))
-            box.addView(label("$${"%.2f".format(offer.optInt("driver_pay_cents") / 100.0)}", 24f, Color.WHITE))
+            val paySuffix = if (thrift) " fixed job pay" else ""
+            box.addView(label("${"%.2f".format(offer.optInt("driver_pay_cents") / 100.0)}$paySuffix", 24f, Color.WHITE))
+            if (thrift && offer.optString("mystery_theme").isNotBlank()) {
+                box.addView(label("Theme: ${offer.optString("mystery_theme")}", 15f, lime))
+                box.addView(label("Fixed pay is for completing the job, not time spent shopping.", 13f, muted))
+            }
             val payPerMile = if (offer.isNull("pay_per_mile")) "" else " · $${"%.2f".format(offer.optDouble("pay_per_mile"))}/mi"
             if (!task) box.addView(label("${offer.optInt("stop_count", 1)} stop(s) · ~${offer.optInt("estimated_minutes", 0)} min$payPerMile", 14f, muted))
             box.addView(label(offer.optString("complexity"), 14f, muted))
@@ -410,7 +416,7 @@ class MainActivity : Activity() {
             } else {
                 box.addView(label("${offer.optString("pickup")} → ${offer.optString("dropoff")}", 14f))
             }
-            val acceptText = if (task) "Accept task" else if (shopping) "Accept shopping job" else "Accept delivery"
+            val acceptText = if (task) "Accept task" else if (thrift) "Accept mystery thrift job" else if (shopping) "Accept shopping job" else "Accept delivery"
             box.addView(button(acceptText, primary = true) {
                 runAction(startGpsAfter = !task) {
                     if (task) Api.acceptTask(this, id) else if (shopping) Api.acceptShopping(this, id) else Api.accept(this, id)
