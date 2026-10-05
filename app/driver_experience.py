@@ -179,13 +179,19 @@ def _money(con, uid):
     p=con.execute('SELECT payout_balance_cents,completed FROM driver_profiles WHERE user_id=?',(uid,)).fetchone()
     available=int(p['payout_balance_cents'] if p else 0); completed=int(p['completed'] if p else 0)
     pending=con.execute("SELECT COALESCE(SUM(amount_cents),0) c FROM payment_records WHERE user_id=? AND kind='shopper_payout' AND status='pending'",(uid,)).fetchone()['c']
-    earnings=con.execute("SELECT COALESCE(SUM(amount_cents),0) c FROM ledger WHERE user_id=? AND kind IN ('driver_earning','shopping_reimbursement','driver_tip')",(uid,)).fetchone()['c']
+    # Earnings exclude merchandise reimbursements. A shopper getting $35 back for customer goods
+    # did not earn $35, so profit/tax summaries should not count it as labor income.
+    delivery_pay=con.execute("SELECT COALESCE(SUM(amount_cents),0) c FROM ledger WHERE user_id=? AND kind='driver_earning' AND delivery_id IS NOT NULL",(uid,)).fetchone()['c']
+    shopping_pay=con.execute("SELECT COALESCE(SUM(driver_pay_cents),0) c FROM shopping_orders WHERE driver_id=? AND status='delivered'",(uid,)).fetchone()['c']
+    tips=con.execute("SELECT COALESCE(SUM(amount_cents),0) c FROM ledger WHERE user_id=? AND kind='driver_tip'",(uid,)).fetchone()['c']
+    earnings=int(delivery_pay or 0)+int(shopping_pay or 0)+int(tips or 0)
     expenses=con.execute('SELECT COALESCE(SUM(amount_cents),0) c FROM driver_expenses WHERE driver_id=?',(uid,)).fetchone()['c']
+    reimbursements=con.execute("SELECT COALESCE(SUM(actual_goods_cents),0) c FROM shopping_orders WHERE driver_id=? AND status='delivered'",(uid,)).fetchone()['c']
     payouts=[]
     try:payouts=[dict(r) for r in con.execute('SELECT amount_cents,status,created_at FROM driver_payout_requests WHERE driver_id=? ORDER BY id DESC LIMIT 20',(uid,)).fetchall()]
     except Exception:pass
     miles=con.execute('SELECT COALESCE(SUM(segment_miles),0) c FROM driver_location_history WHERE driver_id=?',(uid,)).fetchone()['c']
-    return {'available_cents':available,'pending_cents':int(pending or 0),'lifetime_earnings_cents':int(earnings or 0),'expense_cents':int(expenses or 0),'estimated_profit_cents':int(earnings or 0)-int(expenses or 0),'completed':completed,'active_miles':round(float(miles or 0),2),'payout_history':payouts}
+    return {'available_cents':available,'pending_cents':int(pending or 0),'lifetime_earnings_cents':earnings,'reimbursement_cents':int(reimbursements or 0),'expense_cents':int(expenses or 0),'estimated_profit_cents':earnings-int(expenses or 0),'completed':completed,'active_miles':round(float(miles or 0),2),'payout_history':payouts}
 
 
 def _enhanced_offers(con):
@@ -249,7 +255,8 @@ def money_api(request:Request):
     u,_=_token_user(request)
     with db() as con: data=_money(con,u['id'])
     expiry=int(time.time())+900; token=sign(f"{u['id']}:{expiry}")
-    data['weekly_report_url']=f'https://localloop-app.onrender.com/driver/report/{token}.csv?period=week'; data['monthly_report_url']=f'https://localloop-app.onrender.com/driver/report/{token}.csv?period=month'
+    base=str(request.base_url).rstrip('/')
+    data['weekly_report_url']=f'{base}/driver/report/{token}.csv?period=week'; data['monthly_report_url']=f'{base}/driver/report/{token}.csv?period=month'
     return data
 
 @app.get('/driver/report/{token}.csv')
