@@ -7,9 +7,6 @@ from .database import db
 from .mobile_api import _token_user
 from .payments import stripe, configured
 
-BASE_URL='https://localloop-app.onrender.com'
-
-
 def _col(con, table:str, definition:str):
     try: con.execute(f'ALTER TABLE {table} ADD COLUMN {definition}')
     except Exception: pass
@@ -25,8 +22,15 @@ def driver_payouts_startup():
             amount_cents INTEGER NOT NULL,
             stripe_transfer_id TEXT DEFAULT '',
             status TEXT DEFAULT 'created',
-            created_at TEXT NOT NULL
+            idempotency_key TEXT DEFAULT '',
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT DEFAULT ''
         )''')
+        _col(con,'driver_payout_requests',"idempotency_key TEXT DEFAULT ''")
+        _col(con,'driver_payout_requests',"error TEXT DEFAULT ''")
+        _col(con,'driver_payout_requests',"updated_at TEXT DEFAULT ''")
+        con.execute('CREATE INDEX IF NOT EXISTS idx_driver_payout_status ON driver_payout_requests(driver_id,status,id)')
 
 
 def _driver_account(con, uid:int):
@@ -74,10 +78,11 @@ def mobile_payout_onboard(request:Request):
             account_id=acct.get('id','')
             if not account_id: raise HTTPException(502,'Stripe did not create a payout account.')
             con.execute('UPDATE driver_compliance SET stripe_account_id=?,updated_at=? WHERE user_id=?',(account_id,now(),u['id']))
+    base=str(request.base_url).rstrip('/')
     link=stripe('POST','/account_links',data={
         'account':account_id,
-        'refresh_url':f'{BASE_URL}/driver/payout/return?retry=1',
-        'return_url':f'{BASE_URL}/driver/payout/return',
+        'refresh_url':f'{base}/driver/payout/return?retry=1',
+        'return_url':f'{base}/driver/payout/return',
         'type':'account_onboarding',
     })
     return {'url':link.get('url','')}
@@ -87,6 +92,9 @@ def mobile_payout_onboard(request:Request):
 def mobile_payout_request(request:Request,amount_cents:int=Form(0)):
     u,_=_token_user(request)
     if not configured(): raise HTTPException(503,'Stripe is not connected.')
+
+    # Reserve the balance before talking to Stripe. This prevents two fast cash-out
+    # requests from both transferring the same available balance.
     with db() as con:
         p=con.execute('SELECT payout_balance_cents FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         available=int(p['payout_balance_cents'] if p else 0)
@@ -95,21 +103,51 @@ def mobile_payout_request(request:Request,amount_cents:int=Form(0)):
         if amount>available: raise HTTPException(400,'Cash-out amount exceeds available earnings.')
         account_id=_driver_account(con,u['id'])
         if not account_id: raise HTTPException(409,'Set up driver payouts first.')
-        acct=_stripe_account_status(account_id)
-        if not acct['details_submitted'] or not acct['transfers_active']:
-            raise HTTPException(409,'Finish Stripe payout setup before cashing out.')
-        key=f'll-payout-{u["id"]}-{uuid.uuid4()}'
+
+    acct=_stripe_account_status(account_id)
+    if not acct['details_submitted'] or not acct['transfers_active']:
+        raise HTTPException(409,'Finish Stripe payout setup before cashing out.')
+
+    key=f'll-payout-{u["id"]}-{uuid.uuid4()}'
+    with db() as con:
+        cur=con.execute(
+            'UPDATE driver_profiles SET payout_balance_cents=payout_balance_cents-? WHERE user_id=? AND payout_balance_cents>=?',
+            (amount,u['id'],amount)
+        )
+        if cur.rowcount!=1: raise HTTPException(409,'Available earnings changed. Refresh and try again.')
+        pr=con.execute(
+            'INSERT INTO driver_payout_requests(driver_id,amount_cents,status,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?)',
+            (u['id'],amount,'processing',key,now(),now())
+        )
+        payout_id=pr.lastrowid
+
+    try:
         tr=stripe('POST','/transfers',data={
             'amount':str(amount),'currency':'usd','destination':account_id,
             'metadata[localloop_driver_id]':str(u['id']),
+            'metadata[localloop_payout_id]':str(payout_id),
         },headers={'Idempotency-Key':key})
         tid=tr.get('id','')
         if not tid: raise HTTPException(502,'Stripe did not confirm the transfer.')
-        cur=con.execute('UPDATE driver_profiles SET payout_balance_cents=payout_balance_cents-? WHERE user_id=? AND payout_balance_cents>=?',(amount,u['id'],amount))
-        if cur.rowcount!=1: raise HTTPException(409,'Available earnings changed. Refresh and try again.')
-        con.execute('INSERT INTO driver_payout_requests(driver_id,amount_cents,stripe_transfer_id,status,created_at) VALUES(?,?,?,?,?)',(u['id'],amount,tid,'sent',now()))
-        con.execute('INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',(u['id'],'driver_payout',-amount,'Driver cash out to Stripe',now()))
-    return {'ok':True,'amount_cents':amount,'transfer_id':tid}
+    except Exception as exc:
+        # Release only a still-processing reservation. This makes retry/recovery safe.
+        with db() as con:
+            row=con.execute('SELECT status FROM driver_payout_requests WHERE id=? AND driver_id=?',(payout_id,u['id'])).fetchone()
+            if row and row['status']=='processing':
+                con.execute('UPDATE driver_profiles SET payout_balance_cents=payout_balance_cents+? WHERE user_id=?',(amount,u['id']))
+                con.execute('UPDATE driver_payout_requests SET status=?,error=?,updated_at=? WHERE id=?',('failed',str(exc)[:500],now(),payout_id))
+        raise
+
+    with db() as con:
+        con.execute(
+            'UPDATE driver_payout_requests SET stripe_transfer_id=?,status=?,error=?,updated_at=? WHERE id=? AND driver_id=?',
+            (tid,'sent','',now(),payout_id,u['id'])
+        )
+        con.execute(
+            'INSERT INTO ledger(user_id,delivery_id,kind,amount_cents,note,created_at) VALUES(?,NULL,?,?,?,?)',
+            (u['id'],'driver_payout',-amount,f'Driver cash out to Stripe · payout #{payout_id}',now())
+        )
+    return {'ok':True,'amount_cents':amount,'transfer_id':tid,'payout_id':payout_id}
 
 
 @app.get('/driver/payout/return',response_class=HTMLResponse)
