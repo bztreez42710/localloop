@@ -68,3 +68,40 @@ def test_task_board_owner_lifecycle_and_safety():
         r=c.post('/jobs',data={'title':'Move ammunition','description':'Move ammunition boxes to another room safely.','category':'moving','neighborhood':'Spokane','location_note':'','offered_dollars':'40','timing_text':'','lawful_attestation':'yes'},follow_redirects=False); assert r.status_code==400
         assert c.post('/jobs/1/accept',follow_redirects=False).status_code==400
         assert c.post('/jobs/1/cancel',follow_redirects=False).status_code==303; assert c.get('/admin/jobs').status_code==200
+
+
+def test_driver_web_app_shows_and_completes_community_tasks():
+    from app.database import db
+    title='Driver feed regression task'
+    with TestClient(app) as c:
+        assert login(c,'owner@test.local','OwnerPass123!','admin').status_code==303
+        accept_legal(c)
+        posted=c.post('/jobs',data={'title':title,'description':'Carry a few labeled boxes from the garage to the storage shelves.','category':'moving','neighborhood':'Spokane','location_note':'Meet at the public entrance','offered_dollars':'35','timing_text':'Today','lawful_attestation':'yes'},follow_redirects=False)
+        assert posted.status_code==303
+        with db() as con:
+            task=con.execute('SELECT id FROM community_tasks WHERE title=?',(title,)).fetchone()
+            assert task
+            task_id=task['id']
+        c.post('/logout')
+        assert register(c,'driver-task-feed@test.local','DriverTaskFeed123!','Task Feed Driver','driver').status_code==303
+        accept_legal(c)
+        with db() as con:
+            driver=con.execute('SELECT id FROM users WHERE email=?',('driver-task-feed@test.local',)).fetchone()
+            driver_id=driver['id']
+            con.execute('INSERT OR IGNORE INTO driver_profiles(user_id) VALUES(?)',(driver_id,))
+            con.execute('UPDATE driver_profiles SET online=1 WHERE user_id=?',(driver_id,))
+            con.execute('INSERT OR IGNORE INTO driver_compliance(user_id,updated_at) VALUES(?,?)',(driver_id,'2026-10-09T00:00:00+00:00'))
+            con.execute("UPDATE driver_compliance SET identity_status='approved',background_status='approved',insurance_status='approved' WHERE user_id=?",(driver_id,))
+        page=c.get('/driver/app')
+        assert page.status_code==200 and title in page.text
+        offers=c.get('/driver/offers.json')
+        assert offers.status_code==200
+        assert any(o.get('key')==f'task:{task_id}' and o.get('type')=='task' for o in offers.json()['offers'])
+        accepted=c.post(f'/driver/tasks/{task_id}/accept',follow_redirects=False)
+        assert accepted.status_code==303 and '/driver/app#active' in accepted.headers.get('location','')
+        active=c.get('/driver/app')
+        assert active.status_code==200 and title in active.text and 'Task accepted' in active.text
+        completed=c.post(f'/driver/tasks/{task_id}/complete',data={'note':'Moved boxes to the storage shelves.'},follow_redirects=False)
+        assert completed.status_code==303 and '/driver/app#active' in completed.headers.get('location','')
+        active=c.get('/driver/app')
+        assert active.status_code==200 and 'Waiting for the customer to confirm completion.' in active.text

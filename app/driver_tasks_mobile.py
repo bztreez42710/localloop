@@ -60,8 +60,8 @@ def mobile_accept_task(tid:int,request:Request):
     with db() as con:
         p=con.execute('SELECT online FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         if not p or not p['online']: raise HTTPException(409,'Go online before accepting a task')
-        c=con.execute('SELECT identity_status,background_status FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
-        if not c or c['identity_status']!='approved' or c['background_status']!='approved':
+        c=con.execute('SELECT identity_status,background_status,insurance_status FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
+        if not c or any(c[k]!='approved' for k in ('identity_status','background_status','insurance_status')):
             raise HTTPException(403,'Driver verification is not complete')
         task=con.execute('SELECT * FROM community_tasks WHERE id=?',(tid,)).fetchone()
         if not task: raise HTTPException(404,'Task not found')

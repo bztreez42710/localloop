@@ -49,9 +49,11 @@ def driver_app(request:Request):
         profile=con.execute('SELECT * FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
         available=con.execute("SELECT d.*,u.name customer FROM deliveries d JOIN users u ON u.id=d.customer_id WHERE d.status='posted' ORDER BY d.id DESC LIMIT 40").fetchall()
         shopping_available=con.execute("SELECT o.*,c.name customer,(SELECT COUNT(*) FROM shopping_stops s WHERE s.order_id=o.id) stop_count FROM shopping_orders o JOIN users c ON c.id=o.customer_id WHERE o.status='posted' AND o.payment_status='funded' ORDER BY o.id DESC LIMIT 40").fetchall()
+        community_available=con.execute("SELECT t.*,p.name poster_name FROM community_tasks t JOIN users p ON p.id=t.poster_id WHERE t.status='open' AND t.poster_id<>? ORDER BY t.id DESC LIMIT 40",(u['id'],)).fetchall()
         mine=con.execute("SELECT * FROM deliveries WHERE driver_id=? AND status IN ('accepted','picked_up') ORDER BY id DESC",(u['id'],)).fetchall()
+        active_tasks=con.execute("SELECT * FROM community_tasks WHERE worker_id=? AND status IN ('accepted','awaiting_confirmation') ORDER BY id DESC LIMIT 20",(u['id'],)).fetchall()
         compliance=con.execute('SELECT * FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
-    return page(request,'driver_app.html',profile=profile,available=available,shopping_available=shopping_available,mine=mine,compliance=compliance,friendly=friendly,notice=request.query_params.get('notice',''))
+    return page(request,'driver_app.html',profile=profile,available=available,shopping_available=shopping_available,community_available=community_available,mine=mine,active_tasks=active_tasks,compliance=compliance,friendly=friendly,notice=request.query_params.get('notice',''))
 
 @app.get('/driver/offers.json')
 def driver_offers(request:Request):
@@ -62,8 +64,10 @@ def driver_offers(request:Request):
         if not p or not p['online']: return JSONResponse({'online':False,'offers':[]},headers={'Cache-Control':'no-store'})
         rows=con.execute("SELECT id,driver_pay_cents,distance_miles,pickup,dropoff,item_description,updated_at FROM deliveries WHERE status='posted' ORDER BY id DESC LIMIT 40").fetchall()
         shopping=con.execute("SELECT o.id,o.driver_pay_cents,o.dropoff,o.updated_at,(SELECT COUNT(*) FROM shopping_stops s WHERE s.order_id=o.id) stop_count FROM shopping_orders o WHERE o.status='posted' AND o.payment_status='funded' ORDER BY o.id DESC LIMIT 40").fetchall()
+        tasks=con.execute("SELECT id,title,description,category,neighborhood,location_note,offered_cents,timing_text,updated_at FROM community_tasks WHERE status='open' AND poster_id<>? ORDER BY id DESC LIMIT 40",(u['id'],)).fetchall()
         offers=[{'key':'delivery:'+str(x['id']),'type':'delivery',**dict(x)} for x in rows]
         offers += [{'key':'shopping:'+str(x['id']),'type':'shopping','id':x['id'],'driver_pay_cents':x['driver_pay_cents'],'distance_miles':0,'pickup':f"{x['stop_count']} shopping stop"+('s' if x['stop_count']!=1 else ''),'dropoff':x['dropoff'],'item_description':'Personal shopping request','updated_at':x['updated_at']} for x in shopping]
+        offers += [{'key':'task:'+str(x['id']),'type':'task','id':x['id'],'driver_pay_cents':x['offered_cents'],'distance_miles':0,'pickup':(x['location_note'] or x['neighborhood'] or 'Spokane, WA'),'dropoff':(x['location_note'] or x['neighborhood'] or 'Spokane, WA'),'item_description':x['description'],'title':x['title'],'category':x['category'],'timing_text':x['timing_text'],'updated_at':x['updated_at']} for x in tasks]
     return JSONResponse({'online':True,'offers':offers},headers={'Cache-Control':'no-store'})
 
 @app.post('/deliveries/{did}/accept')
@@ -78,6 +82,36 @@ def driver_accept_delivery(did:int,request:Request):
         cur=con.execute("UPDATE deliveries SET driver_id=?,status='accepted',accepted_at=?,updated_at=? WHERE id=? AND status='posted'",(u['id'],now(),now(),did))
         if cur.rowcount!=1:return RedirectResponse('/driver/app?notice=already_claimed#offers',303)
         d=con.execute('SELECT * FROM deliveries WHERE id=?',(did,)).fetchone(); event(con,did,u['id'],'accepted'); notify(con,d['customer_id'],'Driver assigned',f'Delivery #{did} was accepted.')
+    return RedirectResponse('/driver/app#active',303)
+
+@app.post('/driver/tasks/{tid}/accept')
+def driver_accept_task(tid:int,request:Request):
+    u=_driver(request)
+    if not u:return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
+    with db() as con:
+        con.execute('INSERT OR IGNORE INTO driver_profiles(user_id) VALUES(?)',(u['id'],))
+        p=con.execute('SELECT online FROM driver_profiles WHERE user_id=?',(u['id'],)).fetchone()
+        c=con.execute('SELECT identity_status,background_status,insurance_status FROM driver_compliance WHERE user_id=?',(u['id'],)).fetchone()
+        ready=bool(c and all(c[k]=='approved' for k in ('identity_status','background_status','insurance_status')))
+        if not ready:return RedirectResponse('/driver/setup?verification_required=1',303)
+        if not p or not p['online']:return RedirectResponse('/driver/app?notice=go_online#offers',303)
+        task=con.execute('SELECT * FROM community_tasks WHERE id=?',(tid,)).fetchone()
+        if not task:return RedirectResponse('/driver/app?notice=task_missing#offers',303)
+        if task['poster_id']==u['id']:return RedirectResponse('/driver/app?notice=own_task#offers',303)
+        cur=con.execute("UPDATE community_tasks SET worker_id=?,status='accepted',accepted_at=?,updated_at=? WHERE id=? AND status='open'",(u['id'],now(),now(),tid))
+        if cur.rowcount!=1:return RedirectResponse('/driver/app?notice=task_already_claimed#offers',303)
+        notify(con,task['poster_id'],'Task accepted',f'Your task #{tid} was accepted by a LocalLoop driver.')
+    return RedirectResponse('/driver/app#active',303)
+
+@app.post('/driver/tasks/{tid}/complete')
+def driver_complete_task(tid:int,request:Request,note:str=Form('')):
+    u=_driver(request)
+    if not u:return RedirectResponse('/driver/login?next='+quote('/driver/app',safe=''),303)
+    with db() as con:
+        task=con.execute("SELECT * FROM community_tasks WHERE id=? AND worker_id=? AND status='accepted'",(tid,u['id'])).fetchone()
+        if not task:return RedirectResponse('/driver/app?notice=task_missing#active',303)
+        con.execute("UPDATE community_tasks SET status='awaiting_confirmation',worker_note=?,worker_completed_at=?,updated_at=? WHERE id=?",(note.strip()[:1000],now(),now(),tid))
+        notify(con,task['poster_id'],'Task ready for confirmation',f'Task #{tid} was marked finished. Please confirm the work.')
     return RedirectResponse('/driver/app#active',303)
 
 @app.post('/deliveries/{did}/status')
